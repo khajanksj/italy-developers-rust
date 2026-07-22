@@ -28,7 +28,7 @@
       <a class="text-link" href="/about/{{ item.slug }}">Open dedicated page →</a>
     </div>
     <div>
-      {% if !item.image.is_empty() %}<img src="{{ item.image }}" alt="{{ item.image_alt }}" loading="lazy">{% endif %}
+      {% if !item.image.is_empty() %}<img src="{{ item.image }}" alt="{{ item.image_alt }}">{% endif %}
       <div class="prose">{{ item.body|safe }}</div>
     </div>
   </article>
@@ -44,7 +44,7 @@
   <article class="media-card">
     <a href="/{% if kind == "service" %}services{% else if kind == "insight" %}insights{% else if kind == "tech" %}tech-stack{% else %}{{ kind }}{% endif %}/{{ item.slug }}">
       {% if !item.image.is_empty() %}
-      <img src="{{ item.image }}" alt="{{ item.image_alt }}" loading="lazy">
+      <img src="{{ item.image }}" alt="{{ item.image_alt }}">
       {% else %}
       <div class="image-placeholder {% if kind == "work" %}work-art{% endif %}"><span>0{{ loop.index }}</span></div>
       {% endif %}

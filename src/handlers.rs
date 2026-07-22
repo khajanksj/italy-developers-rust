@@ -378,7 +378,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
     blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
     blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
-    if migrations.find_one(doc! {"key":"editorial-v8"}).await?.is_some() {
+    if migrations.find_one(doc! {"key":"editorial-v9"}).await?.is_some() {
         return Ok(());
     }
     let now = DateTime::now();
@@ -429,12 +429,14 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     migrations.insert_one(doc! {"key":"editorial-v2","applied_at":now}).await?;
     apply_editorial_v3(db, now).await?;
     apply_service_v8(db, now).await?;
+    apply_project_proof_v9(db, now).await?;
     migrations.insert_one(doc! {"key":"editorial-v3","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v4","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v5","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v6","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v7","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v8","applied_at":now}).await?;
+    migrations.insert_one(doc! {"key":"editorial-v9","applied_at":now}).await?;
     Ok(())
 }
 
@@ -514,6 +516,23 @@ async fn apply_service_v8(db: &Database, now: DateTime) -> Result<(), AppError> 
     for (order, (slug, title, summary, body, eyebrow, image)) in services.into_iter().enumerate() {
         let item = ContentItem { id:None, kind:"service".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:body.into(), image:image.into(), image_alt:format!("Italy Developers service: {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"custom software Italy, application development, AI integration, websites, APIs".into(), cta:"Tell us what you want to build".into(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
         content(db).replace_one(doc! {"kind":"service","slug":slug}, item).upsert(true).await?;
+    }
+    Ok(())
+}
+
+async fn apply_project_proof_v9(db: &Database, now: DateTime) -> Result<(), AppError> {
+    content(db).delete_many(doc! {"kind":"testimonial"}).await?;
+    let proof = [
+        ("italy-developers-proof","Italy Developers CMS","Rust · Actix · MongoDB","Production-ready CMS with role-based editing, uploads, SEO, leads, nested comments, likes and Docker deployment.","/static/images/small-business-websites.png"),
+        ("doappointment-proof","DoAppointment","Scheduling · Profiles · Availability","Appointment platform capability covering professional profiles, working hours, customer accounts and booking workflows.","/media/covers/work/doappointment-platform.svg"),
+        ("storemate-proof","StoreMate","CRM · Inventory · APIs","Operational backend with authentication, OTP, products, stock, suppliers, alerts, background jobs and documented APIs.","/static/images/workflow-automation.png"),
+        ("drf-shapeless-proof","DRF Shapeless Serializers","Open source · Python · Django REST","Published package for runtime fields, renaming, conditional data and deeply nested serializer configuration.","/static/images/digital-strategy.png"),
+        ("jgob-proof","JGOB Platform","Community · Commerce · Payments","Content, causes, volunteers, product catalogue, cart, checkout and payment integration in one Django platform.","/static/images/lean-ecommerce.png"),
+        ("pet-care-proof","Pet Care AI","Upcoming · Responsible AI","Owner-scoped pet profiles and probabilistic dog audio analysis designed with visible uncertainty and clear safety boundaries.","/media/covers/work/pet-care-ai-upcoming.svg")
+    ];
+    for (order, (slug, title, eyebrow, summary, image)) in proof.into_iter().enumerate() {
+        let item = ContentItem { id:None, kind:"testimonial".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:"Verified portfolio evidence. No client quote or performance claim is implied.".into(), image:image.into(), image_alt:format!("{title} project preview"), seo_title:String::new(), seo_description:String::new(), keywords:String::new(), cta:"View the work".into(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
+        content(db).replace_one(doc! {"kind":"testimonial","slug":slug}, item).upsert(true).await?;
     }
     Ok(())
 }
