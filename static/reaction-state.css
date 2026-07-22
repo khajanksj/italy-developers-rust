@@ -1,0 +1,1 @@
+.discussion .comment>footer button.liked,.post-like button.liked{background:var(--green)!important;border-color:var(--green)!important;color:#fff!important}.discussion button[aria-busy="true"]{opacity:.6;cursor:wait!important}

@@ -1,6 +1,6 @@
 use actix_multipart::Multipart;
 use actix_session::Session;
-use actix_web::{http::header, web, HttpResponse};
+use actix_web::{http::header, web, HttpRequest, HttpResponse};
 use askama::Template;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
@@ -861,14 +861,18 @@ async fn toggle_reaction(session: &Session, db: &Database, target: String) -> Re
     }
 }
 
-async fn toggle_blog_like(session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<LikeForm>) -> Result<HttpResponse, AppError> {
+fn wants_json(req: &HttpRequest) -> bool { req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()).map(|v| v.contains("application/json")).unwrap_or(false) }
+
+async fn toggle_blog_like(req: HttpRequest, session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<LikeForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
     one(&db, "blog", &slug).await?;
-    toggle_reaction(&session, &db, format!("post:{}", slug)).await?;
+    let active = toggle_reaction(&session, &db, format!("post:{}", slug)).await?;
+    let count = blog_reactions(&db).count_documents(doc! {"target":format!("post:{}", slug)}).await?;
+    if wants_json(&req) { return Ok(HttpResponse::Ok().json(serde_json::json!({"active":active,"count":count}))); }
     Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, format!("/blog/{}#discussion", slug))).finish())
 }
 
-async fn toggle_comment_like(session: Session, db: web::Data<Database>, path: web::Path<(String,String)>, form: web::Form<LikeForm>) -> Result<HttpResponse, AppError> {
+async fn toggle_comment_like(req: HttpRequest, session: Session, db: web::Data<Database>, path: web::Path<(String,String)>, form: web::Form<LikeForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
     let (slug, id) = path.into_inner();
     let oid = ObjectId::parse_str(&id).map_err(|_| AppError::BadRequest)?;
@@ -876,6 +880,8 @@ async fn toggle_comment_like(session: Session, db: web::Data<Database>, path: we
     let added = toggle_reaction(&session, &db, format!("comment:{id}")).await?;
     let delta = if added { 1 } else { -1 };
     blog_comments(&db).update_one(doc! {"_id":oid}, doc! {"$inc":{"likes":delta}}).await?;
+    let count = blog_comments(&db).find_one(doc! {"_id":oid}).await?.map(|comment| comment.likes).unwrap_or(0);
+    if wants_json(&req) { return Ok(HttpResponse::Ok().json(serde_json::json!({"active":added,"count":count}))); }
     Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, format!("/blog/{slug}#comment-{id}"))).finish())
 }
 

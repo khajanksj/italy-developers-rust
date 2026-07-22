@@ -12,6 +12,10 @@
   mediaStyles.rel = "stylesheet";
   mediaStyles.href = "/static/media-fixes.css";
   document.head.append(mediaStyles);
+  const reactionStyles = document.createElement("link");
+  reactionStyles.rel = "stylesheet";
+  reactionStyles.href = "/static/reaction-state.css";
+  document.head.append(reactionStyles);
   document.addEventListener("error", (event) => {
     const img = event.target;
     if (!(img instanceof HTMLImageElement) || img.dataset.fallbackApplied) return;
@@ -146,6 +150,25 @@
     navigate(a.href);
   });
   document.addEventListener("submit", (event) => {
+    const likeForm = event.target.closest?.(".post-like, .comment>footer form");
+    if (likeForm) {
+      event.preventDefault();
+      const button = likeForm.querySelector("button[type='submit'], button:not([type])");
+      if (!button || button.disabled) return;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      fetch(likeForm.action, {method:"POST",body:new URLSearchParams(new FormData(likeForm)),headers:{Accept:"application/json","X-Requested-With":"ItalyDevelopersReaction"}})
+        .then((response) => { if (!response.ok) throw new Error("reaction failed"); return response.json(); })
+        .then((data) => {
+          const isPost = likeForm.classList.contains("post-like");
+          button.textContent = isPost ? `♥ ${data.count} ${data.count === 1 ? "like" : "likes"}` : `♥ ${data.count} Like`;
+          button.classList.toggle("liked", Boolean(data.active));
+          button.setAttribute("aria-pressed", String(Boolean(data.active)));
+        })
+        .catch(() => likeForm.submit())
+        .finally(() => { button.disabled = false; button.removeAttribute("aria-busy"); });
+      return;
+    }
     const form = event.target.closest?.("#comment-form[data-requires-auth]");
     if (!form) return;
     event.preventDefault();
