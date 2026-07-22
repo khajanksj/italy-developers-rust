@@ -5,7 +5,9 @@ use askama::Template;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
     bson::{doc, oid::ObjectId, DateTime},
+    options::IndexOptions,
     Database,
+    IndexModel,
 };
 use serde::{Deserialize, Serialize};
 use validator::Validate;
@@ -94,6 +96,37 @@ struct Lead {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct BlogComment {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    id: Option<ObjectId>,
+    post_slug: String,
+    parent_id: Option<ObjectId>,
+    author: String,
+    body: String,
+    likes: i64,
+    published: bool,
+    created_at: DateTime,
+}
+
+#[derive(Clone)]
+struct CommentView {
+    id: String,
+    author: String,
+    body: String,
+    likes: i64,
+    depth: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BlogReaction {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    id: Option<ObjectId>,
+    target: String,
+    visitor: String,
+    created_at: DateTime,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AdminUser {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     id: Option<ObjectId>,
@@ -172,6 +205,9 @@ struct DetailTemplate {
     item: ContentItem,
     canonical: String,
     schema_type: String,
+    csrf: String,
+    comments: Vec<CommentView>,
+    post_likes: i64,
 }
 #[derive(Template)]
 #[template(path = "contact.html")]
@@ -228,6 +264,12 @@ fn content(db: &Database) -> mongodb::Collection<ContentItem> {
 }
 fn leads(db: &Database) -> mongodb::Collection<Lead> {
     db.collection("leads")
+}
+fn blog_comments(db: &Database) -> mongodb::Collection<BlogComment> {
+    db.collection("blog_comments")
+}
+fn blog_reactions(db: &Database) -> mongodb::Collection<BlogReaction> {
+    db.collection("blog_reactions")
 }
 fn users(db: &Database) -> mongodb::Collection<AdminUser> {
     db.collection("admin_users")
@@ -302,6 +344,9 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
         .route("/insights/{slug}", web::get().to(insight_detail))
         .route("/blog", web::get().to(blog))
         .route("/blog/{slug}", web::get().to(blog_detail))
+        .route("/blog/{slug}/comment", web::post().to(add_blog_comment))
+        .route("/blog/{slug}/like", web::post().to(toggle_blog_like))
+        .route("/blog/{slug}/comments/{id}/like", web::post().to(toggle_comment_like))
         .route("/contact", web::get().to(contact_page))
         .route("/contact", web::post().to(submit_contact))
         .route("/robots.txt", web::get().to(robots))
@@ -330,7 +375,9 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
 
 async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
-    if migrations.find_one(doc! {"key":"editorial-v2"}).await?.is_some() {
+    blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
+    blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
+    if migrations.find_one(doc! {"key":"editorial-v4"}).await?.is_some() {
         return Ok(());
     }
     let now = DateTime::now();
@@ -378,6 +425,55 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
         content(db).replace_one(doc! {"kind":&item.kind,"slug":&item.slug}, item).upsert(true).await?;
     }
     migrations.insert_one(doc! {"key":"editorial-v2","applied_at":now}).await?;
+    apply_editorial_v3(db, now).await?;
+    migrations.insert_one(doc! {"key":"editorial-v3","applied_at":now}).await?;
+    migrations.insert_one(doc! {"key":"editorial-v4","applied_at":now}).await?;
+    Ok(())
+}
+
+async fn apply_editorial_v3(db: &Database, now: DateTime) -> Result<(), AppError> {
+    content(db).delete_many(doc! {"kind":"work","slug":{"$in":["osteria-verde","falegnameria-rossi","studio-contabile-luce"]}}).await?;
+    content(db).delete_many(doc! {"kind":"service","slug":{"$in":["siti-web-per-piccole-imprese","ecommerce-accessibile","automazione-processi"]}}).await?;
+    content(db).delete_many(doc! {"kind":"blog","slug":{"$in":["seo-locale-piccole-imprese","sito-veloce-piu-clienti"]}}).await?;
+    let entries = [
+        ("service","custom-websites-cms","Custom websites and content-management systems","Fast server-rendered websites with an admin area, uploads, SEO controls, enquiries and deployment included.","<p class=\"lead\">We design and build maintainable business websites where owners can manage services, projects, articles and images without editing code.</p><h2>What we can deliver</h2><ul><li>Responsive public pages and reusable content sections</li><li>Secure role-based admin dashboard</li><li>Image uploads, SEO fields, sitemap and structured data</li><li>Contact and lead-management workflow</li><li>Docker deployment, health checks and persistent storage</li></ul><h2>Proven in this platform</h2><p>This Italy Developers website is the working reference implementation. Explore its public content, CMS architecture and deployment setup in the <a href=\"https://github.com/khajanksj/italy-developers-rust\" target=\"_blank\" rel=\"noopener\">public GitHub repository</a>.</p><h3>Best fit</h3><p>Service businesses, developer portfolios, publications and teams that need custom workflows beyond a page-builder template.</p>","Web platforms","/static/images/small-business-websites.png"),
+        ("service","python-django-apis","Python, Django and REST API development","Structured back ends, admin workflows and APIs built with Python, Django and Django REST Framework.","<p class=\"lead\">We build and extend Django applications where clear data models, permissions, validation and maintainable APIs matter.</p><h2>Practical capabilities</h2><ul><li>Django models, admin and business workflows</li><li>Django REST Framework serializers, ViewSets and permissions</li><li>Nested resources, filtering and version-aware response shapes</li><li>API integration with web or Python clients</li><li>Tests, documentation and containerized delivery</li></ul><h2>Public package evidence</h2><p>Our open-source <a href=\"https://github.com/khajanksj/drf-shapeless-serializers\" target=\"_blank\" rel=\"noopener\">drf-shapeless-serializers</a> package supports runtime field selection, renaming, conditional fields and deeply nested serializer configuration. Documentation is available on <a href=\"https://drf-shapeless-serializers.readthedocs.io/en/latest/\" target=\"_blank\" rel=\"noopener\">Read the Docs</a>.</p>","Backend and APIs","/static/images/digital-strategy.png"),
+        ("service","admin-dashboards-python","Python admin dashboards and internal tools","Responsive operational dashboards, searchable tables, forms and API-ready interfaces built around real team workflows.","<p class=\"lead\">We can build focused internal tools in Python and Flet for teams that need dashboards, forms, searchable records, settings and responsive navigation.</p><h2>What is realistic</h2><ul><li>Dashboard and analytics cards</li><li>Searchable, filterable data tables</li><li>Validated create and edit forms</li><li>Role-aware navigation and settings</li><li>Light and dark themes</li><li>Connection to Django REST APIs</li></ul><h2>How we scope it</h2><p>We begin with the users, decisions and records the tool must support. Complex accounting, regulated decisions or unsupported desktop integrations are not promised without discovery.</p>","Internal tools","/static/images/workflow-automation.png"),
+        ("work","italy-developers-cms","Italy Developers — production-ready Rust CMS","A complete public website and MongoDB-backed content platform built with Rust, Actix Web, Askama and Docker.","<p class=\"lead\">This live codebase demonstrates the work we can deliver rather than describing a fictional client result.</p><h2>Implemented features</h2><ul><li>Server-rendered home, collection and detail pages</li><li>Role-aware CMS for services, work, technology, blogs and enquiries</li><li>Validated image uploads and persistent storage</li><li>SEO metadata, Schema.org output, sitemap and robots policy</li><li>CSRF protection, secure sessions, rate limiting and security headers</li><li>Authenticated MongoDB production configuration and health checks</li><li>Nested blog comments and visitor likes</li></ul><h2>Source and verification</h2><p>Review the implementation, Docker setup and release history in the <a href=\"https://github.com/khajanksj/italy-developers-rust\" target=\"_blank\" rel=\"noopener\">Italy Developers Rust repository</a>.</p>","Public project","/static/images/small-business-websites.png"),
+        ("work","drf-shapeless-serializers","DRF Shapeless Serializers — open-source Python package","A published Django REST Framework extension for flexible runtime serializer configuration and deeply nested responses.","<p class=\"lead\">The package addresses serializer duplication when different endpoints need different views of the same models.</p><h2>Implemented features</h2><ul><li>Runtime field selection and output-key renaming</li><li>Dynamic field attributes and conditional fields</li><li>Nested serializer configuration at arbitrary depth</li><li>Class-based ViewSet mixin support</li><li>Inline serializers for one-off response shapes</li><li>PyPI packaging and public documentation</li></ul><h2>Project links</h2><p><a href=\"https://github.com/khajanksj/drf-shapeless-serializers\" target=\"_blank\" rel=\"noopener\">GitHub source</a> · <a href=\"https://pypi.org/project/drf-shapeless-serializers/\" target=\"_blank\" rel=\"noopener\">PyPI package</a> · <a href=\"https://drf-shapeless-serializers.readthedocs.io/en/latest/\" target=\"_blank\" rel=\"noopener\">Documentation</a></p>","Open-source package","/static/images/digital-strategy.png"),
+        ("work","doappointment-platform","DoAppointment — booking and professional discovery platform","A Django-based appointment product with professional profiles, availability, working hours, customer accounts and booking workflows.","<p class=\"lead\">DoAppointment brings service discovery and appointment operations into one product.</p><h2>Implemented product areas</h2><ul><li>Customer and professional account flows</li><li>Professional profiles and service information</li><li>Working-hour and availability management</li><li>Appointment creation and status workflow</li><li>Location and profile detail experiences</li><li>Administrative management through Django</li></ul><h2>What it proves</h2><p>We can build two-sided scheduling products where different user roles manage profiles, time and bookings. Source is private, so no public repository link is presented.</p>","Scheduling product","/static/images/small-business-websites.png"),
+        ("work","learning-management-system","Learning Management System","A role-based learning platform for organising courses, learners, teaching content, progress and administration.","<p class=\"lead\">The LMS work covers the core operational structure required to manage learning content and user journeys.</p><h2>Product capabilities</h2><ul><li>Administrator, instructor and learner roles</li><li>Course and lesson organisation</li><li>Enrollment and learner access</li><li>Progress-oriented dashboard views</li><li>Content and account administration</li><li>API-ready architecture for future clients</li></ul><p>This is a private portfolio project; details are intentionally limited to implemented capability and no invented institution or learner metrics are claimed.</p>","Education platform","/static/images/digital-strategy.png"),
+        ("work","jgob-commerce-community","JGOB — community, content and commerce platform","A Django/PostgreSQL platform combining organisation content, causes, volunteering, shop, cart, checkout and Razorpay payment flows.","<p class=\"lead\">JGOB demonstrates a multi-section organisation platform rather than a simple brochure website.</p><h2>Implemented features</h2><ul><li>Causes, stories, team and volunteer content</li><li>Product catalogue, product detail and cart</li><li>Checkout and Razorpay integration points</li><li>Django admin and seedable content</li><li>PostgreSQL, Redis and persistent media</li><li>Docker Compose development environment</li></ul><h2>Technology variants</h2><p>The portfolio also includes a Rust/Actix, Askama and MongoDB JGOB implementation with editable content and static Vercel export.</p>","Community commerce","/static/images/lean-ecommerce.png"),
+        ("work","storemate-crm-inventory","StoreMate — CRM and inventory operations backend","A Django REST Framework system for authentication, business profiles, products, stock, suppliers, alerts and automated communication.","<p class=\"lead\">StoreMate demonstrates operational API work across identity, inventory and customer communication.</p><h2>Implemented features</h2><ul><li>JWT authentication and email/phone registration</li><li>OTP verification and password recovery</li><li>Profiles and business information</li><li>Inventory, products, categories and suppliers</li><li>Low-stock and security email notifications</li><li>PostgreSQL, Redis, Celery and Firebase integration points</li><li>Browsable API schema and Postman collection</li></ul><p>The repository is private; this page describes verified local implementation without publishing credentials or private source.</p>","CRM and inventory","/static/images/workflow-automation.png"),
+        ("work","ai-chat-support","AI-enabled chat and customer support","A support-product capability combining conversation interfaces, structured customer context, operator workflows and AI-assisted responses.","<p class=\"lead\">The work focuses on useful assistance with human control—not an unsupported claim of fully autonomous support.</p><h2>Capability areas</h2><ul><li>Conversation and message interfaces</li><li>Customer context and support history</li><li>AI-assisted drafting and knowledge retrieval</li><li>Operator hand-off and status workflows</li><li>Admin configuration and API integration</li><li>Clear boundaries for privacy and high-impact decisions</li></ul><p>Client and deployment links remain private; the service is offered only after confirming the data source, model cost and escalation workflow.</p>","AI support","/static/images/digital-strategy.png"),
+        ("work","music-application","Music application","A media-focused product covering music discovery, playback-oriented interfaces, library organisation and account experiences.","<p class=\"lead\">The music app demonstrates consumer interface and media-product design capability.</p><h2>Product areas</h2><ul><li>Track and collection browsing</li><li>Search and discovery interface</li><li>User library and playlist-oriented flows</li><li>Responsive playback experience</li><li>Account and administration foundations</li></ul><p>This private project is shown as product capability. Licensing, catalogue acquisition and commercial streaming infrastructure are separate business requirements and are not implied.</p>","Media product","/static/images/lean-ecommerce.png"),
+        ("work","coinprofit-plus","CoinProfit Plus — finance-oriented dashboard product","A portfolio application centred on account dashboards, financial records, status visibility and administrative control.","<p class=\"lead\">CoinProfit Plus demonstrates data-dense dashboard and workflow implementation.</p><h2>Capability demonstrated</h2><ul><li>Account and profile flows</li><li>Dashboard summaries and record history</li><li>Administrative views and status management</li><li>Responsive data presentation</li><li>Validation and security-aware architecture</li></ul><p>This page does not provide investment advice, promise returns or claim regulated financial services. Public transaction or performance metrics are intentionally not invented.</p>","Dashboard product","/static/images/digital-strategy.png"),
+        ("work","gaming-platform","Gaming platform experience","A game-oriented application capability covering player accounts, interactive state, progression views and administrative content.","<p class=\"lead\">The gaming work demonstrates stateful consumer-product interfaces and supporting back-end workflows.</p><h2>Capability areas</h2><ul><li>Player identity and profile experience</li><li>Game state and progress presentation</li><li>Score, reward or leaderboard-ready data models</li><li>Responsive interactive interface</li><li>Administrative content and moderation foundations</li></ul><p>Specific game mechanics and commercial integrations remain private and are scoped case by case.</p>","Interactive product","/static/images/lean-ecommerce.png"),
+        ("work","car-parking-system","Car parking management system","A parking workflow product covering spaces, vehicles, entry/exit records, availability and operational administration.","<p class=\"lead\">The car-parking project demonstrates real-world resource and transaction workflow modelling.</p><h2>Product areas</h2><ul><li>Parking-space and zone management</li><li>Vehicle and user records</li><li>Entry, exit and occupancy status</li><li>Operator dashboard and searchable history</li><li>Payment-ready workflow boundaries</li><li>Reports and administrative controls</li></ul><p>Hardware gates, number-plate recognition and payment providers are offered only when the required devices and integrations are confirmed.</p>","Operations system","/static/images/workflow-automation.png"),
+        ("work","pet-care-ai-upcoming","Pet Care AI — upcoming behavioural insight platform","An in-development Django platform for pet profiles, audio analysis, probabilistic dog behavioural-state estimates and owner feedback.","<p class=\"lead\"><strong>Upcoming project:</strong> Pet Care AI is being developed as an uncertainty-aware support tool, not an animal-language translator or veterinary diagnosis product.</p><h2>Implemented foundation</h2><ul><li>Email-login accounts and owner-scoped pet profiles</li><li>Private audio uploads and processing records</li><li>Dog audio embeddings with supervised behaviour heads</li><li>Probability distribution, confidence and risk presentation</li><li>Feedback, live progress, GraphQL and health endpoints</li><li>Django, PostgreSQL, Celery and Docker architecture</li></ul><h2>Responsible AI boundary</h2><p>Results describe possible behavioural states and expose uncertainty. Medical concerns must go to a qualified veterinarian. Current model support is dog-specific and licensing limits are documented.</p>","Upcoming · Responsible AI","/static/images/workflow-automation.png"),
+        ("tech","rust-actix","Rust and Actix Web","Memory-safe systems development and efficient server-rendered web applications with explicit validation and predictable performance.","<p class=\"lead\">Rust and Actix Web power this website’s routing, middleware, forms, sessions, uploads and operational endpoints.</p><h2>Where we use it</h2><p>Custom web back ends, APIs, content platforms and integrations where correctness and resource efficiency justify a compiled stack.</p><h2>Supporting tools</h2><p>Askama templates, Actix Session, tracing, validation, bcrypt and production Docker builds.</p>","Backend engineering","/static/images/digital-strategy.png"),
+        ("tech","python-django-drf","Python, Django and Django REST Framework","Productive back-end development for data-driven applications, admin workflows, APIs and reusable packages.","<p class=\"lead\">Python is our practical choice for business applications, API development, automation and developer tooling.</p><h2>Verified experience</h2><p>The public DRF Shapeless Serializers package demonstrates advanced serializer composition, ViewSet integration, package publishing and documentation.</p><h2>Good fit</h2><p>Operational systems, REST APIs, admin-heavy applications and integrations that benefit from Django’s mature ecosystem.</p>","Python ecosystem","/static/images/digital-strategy.png"),
+        ("tech","mongodb","MongoDB","Document-oriented storage for evolving content, operational records, enquiries, comments and application settings.","<p class=\"lead\">MongoDB powers content, users, leads, comments and reactions in this platform.</p><h2>How we use it responsibly</h2><p>Typed application structures, bounded queries, authentication, persistent volumes, indexes, validation and documented backup requirements.</p>","Data layer","/static/images/workflow-automation.png"),
+        ("tech","docker-deployment","Docker and Compose","Reproducible multi-stage builds, isolated services, persistent storage, health checks and production configuration.","<p class=\"lead\">We package applications with repeatable Docker builds and explicit runtime configuration.</p><h2>Production practices</h2><ul><li>Non-root read-only application containers</li><li>Persistent database and upload volumes</li><li>Service readiness checks and restart policies</li><li>Secret values kept outside source control</li><li>Bounded logs and documented backup steps</li></ul>","Deployment","/static/images/workflow-automation.png"),
+        ("tech","html-css-javascript","HTML, CSS and JavaScript","Accessible semantic interfaces, responsive layouts and focused browser behaviour without unnecessary front-end weight.","<p class=\"lead\">We use standards-based HTML, CSS and JavaScript for fast public pages and maintainable admin interfaces.</p><h2>Capabilities</h2><p>Responsive design, progressive enhancement, accessible forms, content layouts, client-side validation and lightweight navigation.</p>","Frontend fundamentals","/static/images/small-business-websites.png"),
+        ("tech","flet-python","Flet for Python interfaces","Material-style Python interfaces for responsive dashboards, forms and internal tools that can target desktop or web.","<p class=\"lead\">Flet lets us build operational interfaces in Python while keeping components, routing, themes and services cleanly separated.</p><h2>Realistic uses</h2><p>Admin dashboards, searchable tables, internal forms, settings, chat-style tools and API-connected business utilities.</p>","Python UI","/static/images/workflow-automation.png"),
+        ("tech","git-github-ci","Git, GitHub and CI workflows","Reviewable version control, reproducible checks and traceable delivery for application and package development.","<p class=\"lead\">Source history, focused branches, pull requests and automated compile checks make changes easier to review and recover.</p><h2>Delivery practice</h2><p>We keep secrets out of commits, document release steps and validate production images before deployment.</p>","Engineering workflow","/static/images/digital-strategy.png"),
+        ("blog","rust-actix-production-checklist","A production checklist for Rust and Actix Web","The practical checks we use before putting an Actix Web service behind a real domain.","<p class=\"lead\">A release build is only one part of production readiness. Configuration, failure behaviour and ownership matter just as much.</p><h2>Application checks</h2><ul><li>Validate environment variables at startup</li><li>Bound JSON, form and upload sizes</li><li>Use secure, HTTP-only session cookies</li><li>Apply CSRF protection to state-changing forms</li><li>Return separate live and ready health signals</li></ul><h2>Container checks</h2><p>Run as a non-root user, use a read-only filesystem where possible, persist only necessary data and keep database ports off the public host.</p><h2>Operational checks</h2><p>Test restoration, log rotation, dependency updates and a rollback before launch. A health endpoint is not a backup strategy.</p>","Rust deployment","/static/images/digital-strategy.png"),
+        ("blog","designing-secure-cms","Designing a secure small-team CMS","How to balance editor convenience with roles, validation, safe uploads and recoverable operations.","<p class=\"lead\">A CMS is a privileged application. It deserves stronger boundaries than the public marketing pages it controls.</p><h2>Separate permissions</h2><p>Editors can draft and update content while publishing, deletion and lead access remain with trusted roles. Sessions should expire and cookies should not be readable by browser scripts.</p><h2>Treat uploads as hostile input</h2><p>Check size, extension and file signatures; generate unpredictable filenames; store outside executable paths; and serve with strict content policies.</p><h2>Make mistakes recoverable</h2><p>Keep database and upload backups together, log important changes and avoid destructive bulk actions without confirmation.</p>","CMS engineering","/static/images/small-business-websites.png"),
+        ("blog","mongodb-content-modeling","MongoDB content modelling without losing discipline","A document database is flexible, but useful content systems still need explicit shapes, indexes and migration strategy.","<p class=\"lead\">Flexibility helps content evolve; it should not mean every document has an accidental schema.</p><h2>Model around access patterns</h2><p>Keep content, users, enquiries and comments in separate collections. Query by stable fields such as kind, slug, publication state and creation date.</p><h2>Use application validation</h2><p>Typed Rust structures provide defaults for older documents while admin forms enforce title, slug, summary, SEO and image rules.</p><h2>Migrate intentionally</h2><p>Version editorial seeds and make migrations idempotent. Never overwrite arbitrary editor-created records just because the service restarted.</p>","MongoDB","/static/images/workflow-automation.png"),
+        ("blog","django-rest-framework-dynamic-serializers","When dynamic Django REST Framework serializers help","How runtime field selection can reduce duplication without turning API responses into an undocumented free-for-all.","<p class=\"lead\">List, detail, export and permission-aware endpoints often need different representations of the same model.</p><h2>The duplication problem</h2><p>Creating a serializer class for every small variation increases maintenance and makes nested changes repetitive.</p><h2>A controlled dynamic approach</h2><p>Allow known fields, renames, attributes and nested serializers to be configured at runtime while keeping model and permission rules explicit.</p><h2>Use it deliberately</h2><p>Document supported response shapes, test nesting and avoid letting untrusted query parameters expose arbitrary fields. See the implementation in <a href=\"https://github.com/khajanksj/drf-shapeless-serializers\" target=\"_blank\" rel=\"noopener\">DRF Shapeless Serializers</a>.</p>","Django REST Framework","/static/images/digital-strategy.png"),
+        ("blog","nested-comments-data-model","Building nested comments and likes without a front-end framework","A practical server-rendered model for replies, reactions, validation and progressive enhancement.","<p class=\"lead\">Discussion features do not require a large client application. Standard forms and redirects remain dependable with JavaScript disabled.</p><h2>Store the relationship</h2><p>Each comment keeps a post slug and optional parent identifier. Rendering starts at root comments and walks children with a maximum depth to protect the page.</p><h2>Make likes idempotent</h2><p>Store one reaction per visitor and target, then toggle it. The displayed counter is updated with the reaction so repeated clicks do not create unlimited likes.</p><h2>Protect every write</h2><p>Use CSRF tokens, input length limits, escaped output and rate limiting. Moderation and abuse reporting are the next requirements for an open public launch.</p>","Community features","/static/images/small-business-websites.png"),
+        ("blog","docker-compose-production-overrides","Docker Compose overrides that behave in production","Why merged lists, persistent volumes and environment interpolation deserve testing before deployment.","<p class=\"lead\">Compose merges multiple files, but not every field replaces the previous value. Lists such as ports can produce surprising duplicates.</p><h2>Inspect the merged result</h2><p>Run <code>docker compose config</code> with the real file combination. Explicitly override port mappings when a development mapping must disappear.</p><h2>Separate secrets from templates</h2><p>Commit an example environment file, ignore the real one and fail startup when placeholders remain.</p><h2>Respect existing volumes</h2><p>Database initialization variables usually apply only to an empty data directory. Plan authentication migrations instead of deleting data to make a container start.</p>","Docker","/static/images/workflow-automation.png"),
+        ("blog","server-rendered-seo-basics","SEO foundations for server-rendered business websites","The technical and editorial basics that make pages discoverable without chasing search-engine tricks.","<p class=\"lead\">Search visibility starts with useful pages that load reliably, answer a clear need and can be understood without executing JavaScript.</p><h2>Give every page one job</h2><p>Use a descriptive title, useful summary, logical headings, internal links and a clear next action. Avoid cloning thin pages for every keyword variation.</p><h2>Ship complete metadata</h2><p>Canonical URLs, descriptions, social images, structured data, sitemap entries and crawl rules should reflect the published content.</p><h2>Measure business actions</h2><p>Track qualified enquiries, bookings or downloads—not ranking screenshots alone. Improve pages with real questions from customers.</p>","Technical SEO","/static/images/small-business-websites.png"),
+        ("blog","accessible-admin-forms","Accessible admin forms that editors can trust","Patterns for validation, focus, labels, errors and image descriptions in content-management interfaces.","<p class=\"lead\">Admin accessibility improves accuracy for every editor, especially in long forms with validation and rich content.</p><h2>Keep labels and errors specific</h2><p>Every control needs a persistent label. Put the error beside the field, explain the valid range and preserve entered values after rejection.</p><h2>Support keyboard workflows</h2><p>Use semantic buttons, visible focus, predictable tab order and dialogs that return focus. Do not make drag-and-drop the only upload path.</p><h2>Make content quality visible</h2><p>Character counters, previews and alt-text prompts help editors publish better pages without turning guidelines into guesswork.</p>","Accessibility","/static/images/small-business-websites.png"),
+        ("blog","api-ready-python-dashboard","Designing an API-ready Python dashboard","How components, typed models and service boundaries prepare a Flet interface for real Django data.","<p class=\"lead\">A dashboard prototype becomes easier to connect when local demonstration data is already separated from UI components.</p><h2>Split responsibilities</h2><p>Keep routing, theme, components, pages, domain models and data services in separate modules. Pages should request data rather than own transport details.</p><h2>Design loading and failure states</h2><p>An API-connected interface needs empty, loading, validation, authorization and retry behaviour—not only a successful table.</p><h2>Connect through a service layer</h2><p>Map Django REST responses into typed client models. This prevents raw dictionaries and authentication details from leaking through every component.</p>","Python and Flet","/static/images/workflow-automation.png"),
+        ("blog","small-business-website-scope","How to scope a useful small-business website","A practical way to choose pages, proof and workflows without promising features the team cannot maintain.","<p class=\"lead\">Begin with the customer decision and the action the business can reliably fulfil.</p><h2>Map the essential questions</h2><p>Who is the service for? What problem does it solve? Where is it available? What evidence builds trust? What happens after contact?</p><h2>Prioritise the working core</h2><p>Launch the strongest service pages, real work, about information and a dependable enquiry path before advanced personalization or automation.</p><h2>Keep ownership clear</h2><p>The business should control its domain, content, accounts and data. Document ongoing costs and choose technology the team can support.</p>","Project planning","/static/images/lean-ecommerce.png")
+    ];
+    for (order, (kind, slug, title, summary, body, eyebrow, image)) in entries.into_iter().enumerate() {
+        let item = ContentItem { id:None, kind:kind.into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:body.into(), image:image.into(), image_alt:format!("Editorial illustration for {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"Rust, Python, Django, APIs, CMS, Docker, web development".into(), cta:"Discuss a practical project".into(), featured:kind == "service" || kind == "work" || (kind == "blog" && order < 18), published:true, order:order as i32, created_at:now, updated_at:now };
+        content(db).replace_one(doc! {"kind":kind,"slug":slug}, item).upsert(true).await?;
+    }
+    content(db).update_many(doc! {"$or":[{"image":""},{"image":{"$exists":false}}]}, doc! {"$set":{"image":"/static/images/digital-strategy.png","image_alt":"Italy Developers editorial project image"}}).await?;
     Ok(())
 }
 
@@ -516,53 +612,148 @@ async fn about(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
 }
 async fn detail(
     db: &Database,
+    session: &Session,
     kind: &str,
     slug: &str,
     path: &str,
     schema: &str,
 ) -> Result<HttpResponse, AppError> {
     let item = one(db, kind, slug).await?;
+    let comments = if kind == "blog" { comment_views(db, slug).await? } else { Vec::new() };
+    let post_likes = if kind == "blog" {
+        blog_reactions(db).count_documents(doc! {"target":format!("post:{slug}")}).await? as i64
+    } else { 0 };
     html(DetailTemplate {
         canonical: format!("{}/{}", path, item.slug),
         item,
         schema_type: schema.into(),
+        csrf: csrf(session)?,
+        comments,
+        post_likes,
     })
 }
 async fn service_detail(
+    session: Session,
     db: web::Data<Database>,
     slug: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    detail(&db, "service", &slug, "/services", "Service").await
+    detail(&db, &session, "service", &slug, "/services", "Service").await
 }
 async fn work_detail(
+    session: Session,
     db: web::Data<Database>,
     slug: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    detail(&db, "work", &slug, "/work", "CreativeWork").await
+    detail(&db, &session, "work", &slug, "/work", "CreativeWork").await
 }
 async fn insight_detail(
+    session: Session,
     db: web::Data<Database>,
     slug: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    detail(&db, "insight", &slug, "/insights", "Article").await
+    detail(&db, &session, "insight", &slug, "/insights", "Article").await
 }
 async fn blog_detail(
+    session: Session,
     db: web::Data<Database>,
     slug: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    detail(&db, "blog", &slug, "/blog", "BlogPosting").await
+    detail(&db, &session, "blog", &slug, "/blog", "BlogPosting").await
 }
 async fn tech_detail(
+    session: Session,
     db: web::Data<Database>,
     slug: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    detail(&db, "tech", &slug, "/tech-stack", "TechArticle").await
+    detail(&db, &session, "tech", &slug, "/tech-stack", "TechArticle").await
 }
 async fn about_detail(
+    session: Session,
     db: web::Data<Database>,
     slug: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
-    detail(&db, "about", &slug, "/about", "AboutPage").await
+    detail(&db, &session, "about", &slug, "/about", "AboutPage").await
+}
+
+async fn comment_views(db: &Database, slug: &str) -> Result<Vec<CommentView>, AppError> {
+    let rows: Vec<BlogComment> = blog_comments(db)
+        .find(doc! {"post_slug":slug,"published":true})
+        .sort(doc! {"created_at":1})
+        .await?
+        .try_collect()
+        .await?;
+    fn append(parent: Option<ObjectId>, depth: usize, rows: &[BlogComment], out: &mut Vec<CommentView>) {
+        if depth > 6 { return; }
+        for row in rows.iter().filter(|row| row.parent_id == parent) {
+            let Some(id) = row.id else { continue };
+            out.push(CommentView { id:id.to_hex(), author:row.author.clone(), body:row.body.clone(), likes:row.likes, depth });
+            append(Some(id), depth + 1, rows, out);
+        }
+    }
+    let mut result = Vec::new();
+    append(None, 0, &rows, &mut result);
+    Ok(result)
+}
+
+fn visitor_id(session: &Session) -> Result<String, AppError> {
+    let id = session.get::<String>("visitor").map_err(|_| AppError::BadRequest)?.unwrap_or_else(|| ObjectId::new().to_hex());
+    session.insert("visitor", &id).map_err(|_| AppError::BadRequest)?;
+    Ok(id)
+}
+
+fn valid_csrf(session: &Session, received: &str) -> Result<(), AppError> {
+    let expected = session.get::<String>("csrf").map_err(|_| AppError::Forbidden)?.ok_or(AppError::Forbidden)?;
+    if !security::csrf_valid(&expected, received) { return Err(AppError::Forbidden); }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct CommentForm { author: String, body: String, parent_id: Option<String>, csrf: String }
+
+async fn add_blog_comment(session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<CommentForm>) -> Result<HttpResponse, AppError> {
+    valid_csrf(&session, &form.csrf)?;
+    one(&db, "blog", &slug).await?;
+    let author = form.author.trim();
+    let body = form.body.trim();
+    if !(2..=80).contains(&author.chars().count()) || !(3..=2000).contains(&body.chars().count()) { return Err(AppError::BadRequest); }
+    let parent_id = form.parent_id.as_deref().filter(|v| !v.is_empty()).map(ObjectId::parse_str).transpose().map_err(|_| AppError::BadRequest)?;
+    if let Some(parent) = parent_id {
+        if blog_comments(&db).find_one(doc! {"_id":parent,"post_slug":slug.as_str(),"published":true}).await?.is_none() { return Err(AppError::BadRequest); }
+    }
+    blog_comments(&db).insert_one(BlogComment { id:None, post_slug:slug.to_string(), parent_id, author:author.into(), body:body.into(), likes:0, published:true, created_at:DateTime::now() }).await?;
+    Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, format!("/blog/{}#discussion", slug))).finish())
+}
+
+#[derive(Deserialize)]
+struct LikeForm { csrf: String }
+
+async fn toggle_reaction(session: &Session, db: &Database, target: String) -> Result<bool, AppError> {
+    let visitor = visitor_id(session)?;
+    if let Some(existing) = blog_reactions(db).find_one(doc! {"target":&target,"visitor":&visitor}).await? {
+        if let Some(id) = existing.id { blog_reactions(db).delete_one(doc! {"_id":id}).await?; }
+        Ok(false)
+    } else {
+        blog_reactions(db).insert_one(BlogReaction { id:None, target, visitor, created_at:DateTime::now() }).await?;
+        Ok(true)
+    }
+}
+
+async fn toggle_blog_like(session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<LikeForm>) -> Result<HttpResponse, AppError> {
+    valid_csrf(&session, &form.csrf)?;
+    one(&db, "blog", &slug).await?;
+    toggle_reaction(&session, &db, format!("post:{}", slug)).await?;
+    Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, format!("/blog/{}#discussion", slug))).finish())
+}
+
+async fn toggle_comment_like(session: Session, db: web::Data<Database>, path: web::Path<(String,String)>, form: web::Form<LikeForm>) -> Result<HttpResponse, AppError> {
+    valid_csrf(&session, &form.csrf)?;
+    let (slug, id) = path.into_inner();
+    let oid = ObjectId::parse_str(&id).map_err(|_| AppError::BadRequest)?;
+    if blog_comments(&db).find_one(doc! {"_id":oid,"post_slug":&slug,"published":true}).await?.is_none() { return Err(AppError::NotFound); }
+    let added = toggle_reaction(&session, &db, format!("comment:{id}")).await?;
+    let delta = if added { 1 } else { -1 };
+    blog_comments(&db).update_one(doc! {"_id":oid}, doc! {"$inc":{"likes":delta}}).await?;
+    Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, format!("/blog/{slug}#comment-{id}"))).finish())
 }
 
 fn csrf(session: &Session) -> Result<String, AppError> {
@@ -963,7 +1154,7 @@ async fn admin_save(
     } else {
         previous.as_ref().map(|v| v.published).unwrap_or(false)
     };
-    let item = ContentItem {
+    let mut item = ContentItem {
         id: existing,
         kind: f.get("kind").cloned().unwrap_or_default(),
         slug: f
@@ -998,6 +1189,12 @@ async fn admin_save(
         created_at: previous.as_ref().map(|v| v.created_at).unwrap_or(now),
         updated_at: now,
     };
+    if item.image.is_empty() {
+        item.image = "/static/images/digital-strategy.png".into();
+    }
+    if item.image_alt.trim().is_empty() {
+        item.image_alt = format!("Editorial image for {}", item.title);
+    }
     let mut errors = EditorErrors::default();
     if ![
         "service",
