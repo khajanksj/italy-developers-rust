@@ -34,12 +34,8 @@
   <div class="testimonial-grid">
     {% for item in testimonials %}
     <article class="testimonial-card">
-      <span class="quote-mark">✓</span>
-      <blockquote>{{ item.summary }}</blockquote>
-      <footer>
-        {% if !item.image.is_empty() %}<img src="{{ item.image }}" alt="{{ item.image_alt }}">{% endif %}
-        <div><strong>{{ item.title }}</strong><span>{{ item.eyebrow }}</span>{% if !item.cta.is_empty() %}<small>{{ item.cta }}</small>{% endif %}</div>
-      </footer>
+      {% if !item.image.is_empty() %}<img class="testimonial-image" src="{{ item.image }}" alt="{{ item.image_alt }}" loading="lazy" width="1200" height="900">{% endif %}
+      <div class="testimonial-copy"><p class="kicker">{{ item.eyebrow }}</p><blockquote>{{ item.summary }}</blockquote><footer><strong>{{ item.title }}</strong>{% if !item.cta.is_empty() %}<small>{{ item.cta }}</small>{% endif %}</footer></div>
     </article>
     {% endfor %}
   </div>

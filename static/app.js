@@ -1,5 +1,12 @@
 (() => {
   "use strict";
+  ["content.css", "detail-enhancements.css", "community.css", "home-content.css"].forEach((file) => {
+    if (document.querySelector(`link[href="/static/${file}"]`)) return;
+    const stylesheet = document.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = `/static/${file}`;
+    document.head.append(stylesheet);
+  });
   const navStyles = document.createElement("link");
   navStyles.rel = "stylesheet";
   navStyles.href = "/static/nav-state.css";
