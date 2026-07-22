@@ -1542,10 +1542,9 @@ async fn content_cover(db: web::Data<Database>, path: web::Path<(String, String)
     let (ink, primary, accent, paper) = palettes[(hash as usize) % palettes.len()];
     let x = 120 + (hash % 260) as i32;
     let y = 90 + ((hash >> 8) % 180) as i32;
-    let title: String = item.title.chars().take(48).collect();
     let number = format!("{:02}", (hash % 97) + 1);
-    let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc"><title id="title">{}</title><desc id="desc">Unique editorial cover for {}</desc><rect width="1200" height="900" fill="{}"/><path d="M0 0H700L1030 900H0Z" fill="{}"/><circle cx="{}" cy="{}" r="310" fill="{}" opacity=".92"/><path d="M760 0h440v440L980 660 760 440Z" fill="{}"/><path d="M0 720h1200v180H0Z" fill="{}" opacity=".96"/><g fill="{}" font-family="Arial,Helvetica,sans-serif"><text x="64" y="78" font-size="22" font-weight="700" letter-spacing="5">ITALY DEVELOPERS · {}</text><text x="64" y="690" font-size="68" font-weight="800" letter-spacing="-3">{}</text><text x="64" y="820" font-size="25" font-weight="700" letter-spacing="3">{} · {}</text></g></svg>"#, xml_text(&item.title), xml_text(&item.image_alt), paper, ink, x, y, primary, accent, paper, ink, xml_text(&kind.to_uppercase()), xml_text(&title), number, xml_text(&slug));
-    Ok(HttpResponse::Ok().content_type("image/svg+xml; charset=utf-8").insert_header((header::CACHE_CONTROL,"public, max-age=31536000, immutable")).body(svg))
+    let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc"><title id="title">{}</title><desc id="desc">Unique editorial cover for {}</desc><rect width="1200" height="900" fill="{}"/><path d="M0 0H700L1030 900H0Z" fill="{}"/><circle cx="{}" cy="{}" r="310" fill="{}" opacity=".92"/><path d="M760 0h440v440L980 660 760 440Z" fill="{}"/><path d="M0 720h1200v180H0Z" fill="{}" opacity=".96"/><g fill="{}" font-family="Arial,Helvetica,sans-serif"><text x="64" y="78" font-size="22" font-weight="700" letter-spacing="5">ITALY DEVELOPERS · {}</text><text x="64" y="820" font-size="25" font-weight="700" letter-spacing="3">{} · {}</text></g></svg>"#, xml_text(&item.title), xml_text(&item.image_alt), paper, ink, x, y, primary, accent, paper, ink, xml_text(&kind.to_uppercase()), number, xml_text(&slug));
+    Ok(HttpResponse::Ok().content_type("image/svg+xml; charset=utf-8").insert_header((header::CACHE_CONTROL,"public, max-age=3600")).body(svg))
 }
 
 async fn live() -> HttpResponse {

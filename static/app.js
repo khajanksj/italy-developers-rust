@@ -8,6 +8,26 @@
   communityStyles.rel = "stylesheet";
   communityStyles.href = "/static/community-interactive.css";
   document.head.append(communityStyles);
+  const mediaStyles = document.createElement("link");
+  mediaStyles.rel = "stylesheet";
+  mediaStyles.href = "/static/media-fixes.css";
+  document.head.append(mediaStyles);
+  document.addEventListener("error", (event) => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement) || img.dataset.fallbackApplied) return;
+    const href = img.closest("a")?.getAttribute("href") || location.pathname;
+    const match = href.match(/^\/(services|work|tech-stack|about|insights|blog)\/([^/?#]+)/);
+    if (!match) return;
+    const kind = ({services:"service","tech-stack":"tech",insights:"insight"})[match[1]] || match[1];
+    img.dataset.fallbackApplied = "true";
+    img.classList.add("image-load-failed");
+    img.src = `/media/covers/${kind}/${match[2]}.svg?v=2`;
+  }, true);
+  const refreshGeneratedCovers = (root = document) => root.querySelectorAll('img[src^="/media/covers/"]').forEach((img) => {
+    const url = new URL(img.src, location.origin);
+    if (url.searchParams.get("v") !== "2") { url.searchParams.set("v", "2"); img.src = `${url.pathname}${url.search}`; }
+  });
+  refreshGeneratedCovers();
   const menu = document.querySelector(".menu");
   const nav = document.querySelector("#nav");
   const syncActiveNavigation = () => {
@@ -40,6 +60,7 @@
       if (!next || !current) throw new Error("invalid page");
       const swap = () => {
         current.replaceWith(next);
+        refreshGeneratedCovers(next);
         document.title = doc.title;
         document.querySelector('meta[name="description"]')?.setAttribute("content", doc.querySelector('meta[name="description"]')?.content || "");
         if (push) history.pushState({}, "", url);
