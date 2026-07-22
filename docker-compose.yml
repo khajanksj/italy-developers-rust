@@ -1,23 +1,25 @@
 services:
   db:
-    image: postgres:17-alpine
+    image: mongo:8
     environment:
-      POSTGRES_DB: italy_developers
-      POSTGRES_USER: italy
-      POSTGRES_PASSWORD: local-development-only
-    volumes: [postgres_data:/var/lib/postgresql/data]
-    healthcheck: {test: ["CMD-SHELL", "pg_isready -U italy -d italy_developers"], interval: 5s, timeout: 3s, retries: 10}
+      MONGO_INITDB_DATABASE: italy_developers
+    volumes: [mongo_data:/data/db]
+    healthcheck: {test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"], interval: 5s, timeout: 5s, retries: 20}
   web:
     build: .
     depends_on: {db: {condition: service_healthy}}
     environment:
-      DATABASE_URL: postgres://italy:local-development-only@db:5432/italy_developers
-      APP_SECRET_KEY: local-development-key-change-before-production-00000000000000000000
+      MONGODB_URL: mongodb://db:27017
+      MONGODB_DATABASE: italy_developers
+      APP_SECRET_KEY: development-only-secret-000000000000000000000000000000000000000000000000
+      PUBLIC_URL: http://localhost:8080
+      UPLOAD_DIR: /app/uploads
       COOKIE_SECURE: "false"
       RUST_LOG: info
     ports: ["8080:8080"]
     read_only: true
     tmpfs: [/tmp]
+    volumes: [uploads:/app/uploads]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-volumes: {postgres_data: {}}
+volumes: {mongo_data: {}, uploads: {}}

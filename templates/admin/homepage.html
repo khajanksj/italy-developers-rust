@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Homepage controls · Italy Developers CMS</title>
+  <link rel="stylesheet" href="/static/admin.css">
+  <link rel="stylesheet" href="/static/admin-fixes.css?v=3">
+</head>
+<body class="editor-page">
+  <header class="editor-topbar">
+    <div><a href="/admin" class="back-button">←</a><div><p class="overline">WEBSITE STRUCTURE</p><strong>Homepage controls</strong></div></div>
+    <div class="editor-status"><a href="/" target="_blank">View homepage ↗</a><button form="homepage-form" class="save-button" type="submit">Save homepage</button></div>
+  </header>
+  <main class="homepage-settings-shell">
+    <header class="homepage-settings-heading">
+      <p class="overline">SIMPLE DISPLAY CONTROL</p>
+      <h1>Choose what appears on Home.</h1>
+      <p>Turn sections on or off and set the maximum number of cards. Individual entries appear only when both <strong>Published</strong> and <strong>Show on homepage</strong> are enabled in their editor.</p>
+    </header>
+    <form id="homepage-form" class="homepage-settings-grid" method="post" action="/admin/homepage">
+      <section class="homepage-setting-card">
+        <div><span>01</span><div><h2>Services</h2><p>Homepage service cards</p></div></div>
+        <label class="switch-row"><div><strong>Show section</strong><span>Display Services on Home</span></div><input type="checkbox" name="show_services" {% if settings.show_services %}checked{% endif %}><i></i></label>
+        <label class="field"><span>Maximum cards</span><input type="number" name="service_limit" min="1" max="12" value="{{ settings.service_limit }}" required></label>
+        <small>Eligible content: type Service + Published + Show on homepage.</small>
+      </section>
+      <section class="homepage-setting-card">
+        <div><span>02</span><div><h2>Selected work</h2><p>Homepage case studies</p></div></div>
+        <label class="switch-row"><div><strong>Show section</strong><span>Display Work on Home</span></div><input type="checkbox" name="show_work" {% if settings.show_work %}checked{% endif %}><i></i></label>
+        <label class="field"><span>Maximum cards</span><input type="number" name="work_limit" min="1" max="12" value="{{ settings.work_limit }}" required></label>
+        <small>Lower Display order numbers appear first.</small>
+      </section>
+      <section class="homepage-setting-card">
+        <div><span>03</span><div><h2>Ideas</h2><p>Insights and blog posts combined</p></div></div>
+        <label class="switch-row"><div><strong>Show section</strong><span>Display Ideas on Home</span></div><input type="checkbox" name="show_insights" {% if settings.show_insights %}checked{% endif %}><i></i></label>
+        <label class="field"><span>Maximum links</span><input type="number" name="insight_limit" min="1" max="12" value="{{ settings.insight_limit }}" required></label>
+        <small>Eligible Insights and Blog posts are combined and ordered.</small>
+      </section>
+      <section class="homepage-setting-card testimonial-setting">
+        <div><span>04</span><div><h2>Testimonials</h2><p>Customer trust and social proof</p></div></div>
+        <label class="switch-row"><div><strong>Show section</strong><span>Display Testimonials on Home</span></div><input type="checkbox" name="show_testimonials" {% if settings.show_testimonials %}checked{% endif %}><i></i></label>
+        <label class="field"><span>Maximum testimonials</span><input type="number" name="testimonial_limit" min="1" max="12" value="{{ settings.testimonial_limit }}" required></label>
+        <a class="settings-action" href="/admin/content/new?type=testimonial">＋ Create testimonial</a>
+      </section>
+    </form>
+  </main>
+</body>
+</html>
