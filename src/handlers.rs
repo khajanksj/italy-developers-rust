@@ -349,6 +349,7 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
         .route("/blog/{slug}/comments/{id}/like", web::post().to(toggle_comment_like))
         .route("/contact", web::get().to(contact_page))
         .route("/contact", web::post().to(submit_contact))
+        .route("/media/covers/{kind}/{slug}.svg", web::get().to(content_cover))
         .route("/robots.txt", web::get().to(robots))
         .route("/sitemap.xml", web::get().to(sitemap))
         .route("/health/live", web::get().to(live))
@@ -377,7 +378,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
     blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
     blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
-    if migrations.find_one(doc! {"key":"editorial-v5"}).await?.is_some() {
+    if migrations.find_one(doc! {"key":"editorial-v6"}).await?.is_some() {
         return Ok(());
     }
     let now = DateTime::now();
@@ -400,7 +401,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
         .into_iter()
         .enumerate()
         .map(
-            |(i, (kind, slug, title, summary, body, eyebrow, image))| ContentItem {
+            |(i, (kind, slug, title, summary, body, eyebrow, _image))| ContentItem {
                 id: None,
                 kind: kind.into(),
                 slug: slug.into(),
@@ -408,7 +409,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
                 eyebrow: eyebrow.into(),
                 summary: summary.into(),
                 body: body.into(),
-                image: image.into(),
+                image: format!("/media/covers/{kind}/{slug}.svg"),
                 image_alt: format!("Editorial image for {}", title),
                 seo_title: format!("{} | Italy Developers", title),
                 seo_description: summary.into(),
@@ -430,6 +431,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     migrations.insert_one(doc! {"key":"editorial-v3","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v4","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v5","applied_at":now}).await?;
+    migrations.insert_one(doc! {"key":"editorial-v6","applied_at":now}).await?;
     Ok(())
 }
 
@@ -471,11 +473,19 @@ async fn apply_editorial_v3(db: &Database, now: DateTime) -> Result<(), AppError
         ("blog","api-ready-python-dashboard","Designing an API-ready Python dashboard","How components, typed models and service boundaries prepare a Flet interface for real Django data.","<p class=\"lead\">A dashboard prototype becomes easier to connect when local demonstration data is already separated from UI components.</p><h2>Split responsibilities</h2><p>Keep routing, theme, components, pages, domain models and data services in separate modules. Pages should request data rather than own transport details.</p><h2>Design loading and failure states</h2><p>An API-connected interface needs empty, loading, validation, authorization and retry behaviour—not only a successful table.</p><h2>Connect through a service layer</h2><p>Map Django REST responses into typed client models. This prevents raw dictionaries and authentication details from leaking through every component.</p>","Python and Flet","/static/images/workflow-automation.png"),
         ("blog","small-business-website-scope","How to scope a useful small-business website","A practical way to choose pages, proof and workflows without promising features the team cannot maintain.","<p class=\"lead\">Begin with the customer decision and the action the business can reliably fulfil.</p><h2>Map the essential questions</h2><p>Who is the service for? What problem does it solve? Where is it available? What evidence builds trust? What happens after contact?</p><h2>Prioritise the working core</h2><p>Launch the strongest service pages, real work, about information and a dependable enquiry path before advanced personalization or automation.</p><h2>Keep ownership clear</h2><p>The business should control its domain, content, accounts and data. Document ongoing costs and choose technology the team can support.</p>","Project planning","/static/images/lean-ecommerce.png")
     ];
-    for (order, (kind, slug, title, summary, body, eyebrow, image)) in entries.into_iter().enumerate() {
-        let item = ContentItem { id:None, kind:kind.into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:body.into(), image:image.into(), image_alt:format!("Editorial illustration for {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"Rust, Python, Django, APIs, CMS, Docker, web development".into(), cta:"Discuss a practical project".into(), featured:kind == "service" || kind == "work" || (kind == "blog" && order < 18), published:true, order:order as i32, created_at:now, updated_at:now };
+    for (order, (kind, slug, title, summary, body, eyebrow, _image)) in entries.into_iter().enumerate() {
+        let item = ContentItem { id:None, kind:kind.into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:body.into(), image:format!("/media/covers/{kind}/{slug}.svg"), image_alt:format!("Editorial illustration for {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"Rust, Python, Django, APIs, CMS, Docker, web development".into(), cta:"Discuss a practical project".into(), featured:kind == "service" || kind == "work" || (kind == "blog" && order < 18), published:true, order:order as i32, created_at:now, updated_at:now };
         content(db).replace_one(doc! {"kind":kind,"slug":slug}, item).upsert(true).await?;
     }
-    content(db).update_many(doc! {"$or":[{"image":""},{"image":{"$exists":false}}]}, doc! {"$set":{"image":"/static/images/digital-strategy.png","image_alt":"Italy Developers editorial project image"}}).await?;
+    let seeded: Vec<ContentItem> = content(db).find(doc! {"published":true}).await?.try_collect().await?;
+    for item in seeded {
+        if let Some(id) = item.id {
+            let unique_cover = format!("/media/covers/{}/{}.svg", item.kind, item.slug);
+            if item.image.is_empty() || item.image.starts_with("/static/images/") {
+                content(db).update_one(doc! {"_id":id}, doc! {"$set":{"image":unique_cover,"image_alt":format!("Editorial illustration for {}",item.title)}}).await?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1192,7 +1202,7 @@ async fn admin_save(
         updated_at: now,
     };
     if item.image.is_empty() {
-        item.image = "/static/images/digital-strategy.png".into();
+        item.image = format!("/media/covers/{}/{}.svg", item.kind, item.slug);
     }
     if item.image_alt.trim().is_empty() {
         item.image_alt = format!("Editorial image for {}", item.title);
@@ -1326,6 +1336,35 @@ async fn admin_lead_delete(
     Ok(HttpResponse::SeeOther()
         .insert_header((header::LOCATION, "/admin?toast=lead-deleted"))
         .finish())
+}
+
+fn xml_text(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+async fn content_cover(db: web::Data<Database>, path: web::Path<(String, String)>) -> Result<HttpResponse, AppError> {
+    use std::hash::{Hash, Hasher};
+    let (kind, slug) = path.into_inner();
+    if !["service","work","tech","about","insight","blog","testimonial"].contains(&kind.as_str()) || !slug_valid(&slug) { return Err(AppError::NotFound); }
+    let item = one(&db, &kind, &slug).await?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!("{kind}:{slug}").hash(&mut hasher);
+    let hash = hasher.finish();
+    let palettes = [
+        ("#123c2b", "#39a96b", "#ef3d45", "#f5f0e6"),
+        ("#16213e", "#2f80ed", "#f2994a", "#f7f2e8"),
+        ("#3a172d", "#a33c6f", "#f0a84b", "#f6eee3"),
+        ("#24211d", "#767f45", "#d94a3d", "#f3eddf"),
+        ("#18343b", "#2f8f9d", "#d9a441", "#f5efe5"),
+        ("#2e2140", "#7356a8", "#ef6b4a", "#f5efe6"),
+    ];
+    let (ink, primary, accent, paper) = palettes[(hash as usize) % palettes.len()];
+    let x = 120 + (hash % 260) as i32;
+    let y = 90 + ((hash >> 8) % 180) as i32;
+    let title: String = item.title.chars().take(48).collect();
+    let number = format!("{:02}", (hash % 97) + 1);
+    let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc"><title id="title">{}</title><desc id="desc">Unique editorial cover for {}</desc><rect width="1200" height="900" fill="{}"/><path d="M0 0H700L1030 900H0Z" fill="{}"/><circle cx="{}" cy="{}" r="310" fill="{}" opacity=".92"/><path d="M760 0h440v440L980 660 760 440Z" fill="{}"/><path d="M0 720h1200v180H0Z" fill="{}" opacity=".96"/><g fill="{}" font-family="Arial,Helvetica,sans-serif"><text x="64" y="78" font-size="22" font-weight="700" letter-spacing="5">ITALY DEVELOPERS · {}</text><text x="64" y="690" font-size="68" font-weight="800" letter-spacing="-3">{}</text><text x="64" y="820" font-size="25" font-weight="700" letter-spacing="3">{} · {}</text></g></svg>"#, xml_text(&item.title), xml_text(&item.image_alt), paper, ink, x, y, primary, accent, paper, ink, xml_text(&kind.to_uppercase()), xml_text(&title), number, xml_text(&slug));
+    Ok(HttpResponse::Ok().content_type("image/svg+xml; charset=utf-8").insert_header((header::CACHE_CONTROL,"public, max-age=31536000, immutable")).body(svg))
 }
 
 async fn live() -> HttpResponse {
