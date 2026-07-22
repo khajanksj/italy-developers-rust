@@ -1,7 +1,22 @@
 (() => {
   "use strict";
+  const navStyles = document.createElement("link");
+  navStyles.rel = "stylesheet";
+  navStyles.href = "/static/nav-state.css";
+  document.head.append(navStyles);
   const menu = document.querySelector(".menu");
   const nav = document.querySelector("#nav");
+  const syncActiveNavigation = () => {
+    const currentPath = location.pathname.replace(/\/$/, "") || "/";
+    document.querySelectorAll("#nav a").forEach((link) => {
+      const linkPath = new URL(link.href).pathname.replace(/\/$/, "") || "/";
+      const active = linkPath === "/" ? currentPath === "/" : currentPath === linkPath || currentPath.startsWith(`${linkPath}/`);
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    });
+  };
+  syncActiveNavigation();
   menu?.addEventListener("click", () => {
     const open = menu.getAttribute("aria-expanded") !== "true";
     menu.setAttribute("aria-expanded", String(open));
@@ -24,6 +39,7 @@
         document.title = doc.title;
         document.querySelector('meta[name="description"]')?.setAttribute("content", doc.querySelector('meta[name="description"]')?.content || "");
         if (push) history.pushState({}, "", url);
+        syncActiveNavigation();
         scrollTo({ top: 0, behavior: "instant" });
         next.focus({ preventScroll: true });
       };
