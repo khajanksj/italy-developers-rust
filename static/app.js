@@ -4,6 +4,10 @@
   navStyles.rel = "stylesheet";
   navStyles.href = "/static/nav-state.css";
   document.head.append(navStyles);
+  const communityStyles = document.createElement("link");
+  communityStyles.rel = "stylesheet";
+  communityStyles.href = "/static/community-interactive.css";
+  document.head.append(communityStyles);
   const menu = document.querySelector(".menu");
   const nav = document.querySelector("#nav");
   const syncActiveNavigation = () => {
@@ -58,6 +62,8 @@
       const note = form.querySelector("[data-reply-note]");
       note.hidden = false;
       note.firstChild.textContent = `Replying to ${reply.dataset.replyAuthor}. `;
+      reply.closest(".comment")?.querySelector("[data-reply-slot]")?.append(form);
+      form.classList.add("inline-reply-form");
       form.scrollIntoView({ behavior: "smooth", block: "center" });
       form.querySelector("textarea").focus();
       return;
@@ -66,6 +72,24 @@
       const form = document.querySelector("#comment-form");
       form.querySelector("[data-parent-id]").value = "";
       form.querySelector("[data-reply-note]").hidden = true;
+      document.querySelector("[data-comment-form-home]")?.after(form);
+      form.classList.remove("inline-reply-form");
+      return;
+    }
+    if (event.target.closest("[data-auth-open]")) {
+      document.querySelector("[data-auth-dialog]")?.showModal();
+      return;
+    }
+    if (event.target.closest("[data-auth-close]")) {
+      document.querySelector("[data-auth-dialog]")?.close();
+      return;
+    }
+    const authTab = event.target.closest("[data-auth-tab]");
+    if (authTab) {
+      const mode = authTab.dataset.authTab;
+      document.querySelectorAll("[data-auth-tab]").forEach((tab) => tab.classList.toggle("active", tab === authTab));
+      document.querySelectorAll("[data-auth-panel]").forEach((panel) => panel.hidden = panel.dataset.authPanel !== mode);
+      document.querySelector(`[data-auth-panel="${mode}"] input:not([type="hidden"])`)?.focus();
       return;
     }
     const a = event.target.closest("a");
