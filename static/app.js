@@ -22,10 +22,10 @@
     const href = img.closest("a")?.getAttribute("href") || location.pathname;
     const match = href.match(/^\/(services|work|tech-stack|about|insights|blog)\/([^/?#]+)/);
     if (!match) return;
-    const kind = ({services:"service","tech-stack":"tech",insights:"insight"})[match[1]] || match[1];
     img.dataset.fallbackApplied = "true";
     img.classList.add("image-load-failed");
-    img.src = `/media/covers/${kind}/${match[2]}.svg?v=2`;
+    const fallbacks = {services:"/static/images/small-business-websites.png",work:"/static/images/generated/work-doappointment.webp","tech-stack":"/static/images/generated/tech-python.webp",about:"/static/images/generated/about-community.webp",insights:"/static/images/generated/blog-website-scope.webp",blog:"/static/images/generated/blog-website-scope.webp"};
+    img.src = fallbacks[match[1]] || "/static/images/small-business-websites.png";
   }, true);
   const refreshGeneratedCovers = (root = document) => root.querySelectorAll('img[src^="/media/covers/"]').forEach((img) => {
     const url = new URL(img.src, location.origin);

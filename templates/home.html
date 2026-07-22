@@ -5,14 +5,16 @@
 <section class="hero">
   <div class="hero-copy">
     <p class="eyebrow"><span>Worldwide developer community</span><span>Built exclusively for Italy</span></p>
-    <h1>Global developer talent. One mission: enable Italy.</h1>
-    <p class="intro">Developers from anywhere can join us to build practical websites, applications, APIs and responsible AI for Italy’s local businesses and individuals.</p>
+    <h1>Full-stack products and responsible AI, built for Italy.</h1>
+    <p class="intro">A worldwide developer community building practical websites, mobile apps, business systems, APIs and AI-powered support exclusively for Italy’s local businesses and individuals.</p>
     <div class="actions"><a class="button" href="/contact">Get a practical quote <span>↗</span></a><a class="text-link" href="/work">See real examples →</a></div>
     <div class="trust-row"><span>Clear scope</span><span>Own your content</span><span>Built for local search</span></div>
   </div>
   <div class="hero-art"><div class="green-block"></div><div class="red-arc"></div><div class="value-card"><small>A lean launch plan</small><strong>Start useful.<br>Grow with evidence.</strong><ul><li>Mobile-first website</li><li>Local SEO foundations</li><li>Simple content management</li><li>No unnecessary subscriptions</li></ul></div></div>
 </section>
-<section class="rail"><a href="/services">01 <span>Websites</span></a><a href="/services">02 <span>E-commerce</span></a><a href="/services">03 <span>Automation</span></a><div>✓ <span>Designed for realistic small-business budgets.</span></div></section>
+<section class="rail"><a href="/services">01 <span>Web &amp; mobile</span></a><a href="/services">02 <span>Business systems</span></a><a href="/services">03 <span>AI support</span></a><div>✓ <span>Designed for realistic small-business budgets.</span></div></section>
+
+<section class="section split"><div><p class="kicker">Engineering range</p><h2>One team for product, data and AI.</h2></div><div><p>Python, Django, FastAPI, GraphQL, Rust, Actix Web, Askama, React, Next.js and React Native—supported by PostgreSQL, MongoDB, Docker and production-ready delivery.</p><p>For AI projects we can integrate managed models or deploy suitable open-source models under your control. The architecture follows the real requirement, not a technology trend.</p><a class="text-link" href="/tech-stack">Explore our technology stack →</a></div></section>
 
 {% if services.len() > 0 %}
 <section class="section split"><div><p class="kicker">Services</p><h2>Invest first in what customers actually use.</h2></div><div><p>We cut through bloated proposals and focus on the pages, messages and workflows that can earn trust, generate enquiries or save your team time.</p><a class="text-link" href="/services">Explore every service →</a></div></section>
@@ -48,5 +50,5 @@
 <section class="section split"><div><p class="kicker">Ideas for owners</p><h2>Understand where your budget will work hardest.</h2></div><div>{% for item in insights %}<a class="article-row" href="/{% if item.kind == "blog" %}blog{% else %}insights{% endif %}/{{ item.slug }}"><small>{{ item.eyebrow }}</small><strong>{{ item.title }}</strong><span>→</span></a>{% endfor %}</div></section>
 {% endif %}
 
-<section class="page-cta"><p class="kicker">No obligation, no technical homework</p><h2>Tell us your goal and budget.<br>We’ll suggest a sensible first step.</h2><a class="button" href="/contact">Start the conversation <span>↗</span></a></section>
+<section class="page-cta"><p class="kicker">A focused first engagement</p><h2>Start with a website launch, automation sprint or AI-support pilot.</h2><p>Tell us the business problem and budget. We will propose a small, paid first release with clear scope, ownership and a route to grow.</p><a class="button" href="/contact">Request a practical proposal <span>↗</span></a></section>
 {% endblock %}

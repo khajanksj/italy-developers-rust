@@ -417,7 +417,19 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
     blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
     blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
+    if migrations.find_one(doc! {"key":"market-positioning-v11"}).await?.is_some() {
+        return Ok(());
+    }
+    if migrations.find_one(doc! {"key":"real-photos-v10"}).await?.is_some() {
+        apply_market_positioning_v11(db).await?;
+        migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":DateTime::now()}).await?;
+        return Ok(());
+    }
     if migrations.find_one(doc! {"key":"editorial-v9"}).await?.is_some() {
+        apply_real_photos_v10(db).await?;
+        migrations.insert_one(doc! {"key":"real-photos-v10","applied_at":DateTime::now()}).await?;
+        apply_market_positioning_v11(db).await?;
+        migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     let now = DateTime::now();
@@ -476,6 +488,80 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     migrations.insert_one(doc! {"key":"editorial-v7","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v8","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v9","applied_at":now}).await?;
+    apply_real_photos_v10(db).await?;
+    migrations.insert_one(doc! {"key":"real-photos-v10","applied_at":now}).await?;
+    apply_market_positioning_v11(db).await?;
+    migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":now}).await?;
+    Ok(())
+}
+
+async fn apply_real_photos_v10(db: &Database) -> Result<(), AppError> {
+    let assignments = [
+        ("service","custom-business-software","/static/images/generated/service-custom-software.webp"),
+        ("service","apps-digital-products","/static/images/generated/service-apps-products.webp"),
+        ("service","ai-chat-automation","/static/images/generated/service-ai-support.webp"),
+        ("service","modernisation-rescue-support","/static/images/generated/service-product-rescue.webp"),
+        ("blog","rust-actix-production-checklist","/static/images/generated/blog-rust-actix.webp"),
+        ("blog","designing-secure-cms","/static/images/generated/blog-secure-cms.webp"),
+        ("blog","mongodb-content-modeling","/static/images/generated/blog-mongodb-modeling.webp"),
+        ("blog","django-rest-framework-dynamic-serializers","/static/images/generated/blog-drf-serializers.webp"),
+        ("blog","nested-comments-data-model","/static/images/generated/blog-nested-comments.webp"),
+        ("blog","docker-compose-production-overrides","/static/images/generated/blog-docker-compose.webp"),
+        ("blog","server-rendered-seo-basics","/static/images/generated/blog-server-seo.webp"),
+        ("blog","accessible-admin-forms","/static/images/generated/blog-accessible-forms.webp"),
+        ("blog","api-ready-python-dashboard","/static/images/generated/blog-python-dashboard.webp"),
+        ("blog","small-business-website-scope","/static/images/generated/blog-website-scope.webp"),
+        ("work","doappointment-platform","/static/images/generated/work-doappointment.webp"),
+        ("work","learning-management-system","/static/images/generated/work-lms.webp"),
+        ("work","ai-chat-support","/static/images/generated/work-ai-chat.webp"),
+        ("work","music-application","/static/images/generated/work-music-app.webp"),
+        ("work","coinprofit-plus","/static/images/generated/work-coinprofit.webp"),
+        ("work","gaming-platform","/static/images/generated/work-gaming.webp"),
+        ("work","car-parking-system","/static/images/generated/work-carparking.webp"),
+        ("work","pet-care-ai-upcoming","/static/images/generated/work-pet-care-ai.webp"),
+        ("tech","rust-actix","/static/images/generated/tech-rust.webp"),
+        ("tech","mongodb","/static/images/generated/tech-mongodb.webp"),
+        ("tech","python-django-drf","/static/images/generated/tech-python.webp"),
+        ("tech","docker-deployment","/static/images/generated/tech-docker.webp"),
+        ("tech","html-css-javascript","/static/images/generated/tech-frontend.webp"),
+        ("tech","flet-python","/static/images/generated/tech-flet.webp"),
+        ("tech","git-github-ci","/static/images/generated/tech-git.webp"),
+        ("about","our-approach","/static/images/generated/about-community.webp"),
+        ("about","join-the-community","/static/images/generated/about-join.webp"),
+    ];
+    for (kind, slug, image) in assignments {
+        content(db).update_one(doc! {"kind":kind,"slug":slug}, doc! {"$set":{"image":image,"updated_at":DateTime::now()}}).await?;
+    }
+    Ok(())
+}
+
+async fn apply_market_positioning_v11(db: &Database) -> Result<(), AppError> {
+    let now = DateTime::now();
+    let images = [
+        ("work","italy-developers-cms","/static/images/generated/work-rust-cms.webp"),
+        ("work","storemate-crm-inventory","/static/images/generated/work-storemate.webp"),
+        ("insight","quanto-costa-un-sito-web-in-italia","/static/images/generated/insight-website-cost.webp"),
+        ("testimonial","doappointment-proof","/static/images/generated/proof-doappointment.webp"),
+        ("testimonial","pet-care-proof","/static/images/generated/proof-pet-care.webp"),
+    ];
+    for (kind, slug, image) in images {
+        content(db).update_one(doc! {"kind":kind,"slug":slug}, doc! {"$set":{"image":image,"updated_at":now}}).await?;
+    }
+    let tech = [
+        ("rust-actix", "Rust full-stack: Actix Web + Askama", "Fast, dependable server-rendered products and APIs built with Rust, Actix Web and type-safe Askama templates.", "<p class=\"lead\">We use Rust across the web stack when reliability, security and efficient operation matter.</p><h2>What we build</h2><ul><li>Actix Web APIs, middleware, sessions and integrations</li><li>Askama server-rendered interfaces with strong SEO and low JavaScript overhead</li><li>MongoDB or PostgreSQL persistence</li><li>Secure admin panels, uploads and production Docker delivery</li></ul><p>This website is a working reference for the same stack.</p>"),
+        ("python-django-drf", "Python full-stack: Django, FastAPI + GraphQL", "Business applications, admin systems and integrations using Django, DRF, FastAPI, GraphQL and Python automation.", "<p class=\"lead\">Python gives us a productive path from operational workflow to maintainable web product.</p><h2>Capabilities</h2><ul><li>Django full-stack applications and secure admin workflows</li><li>Django REST Framework and FastAPI services</li><li>REST and GraphQL APIs with validation and permissions</li><li>Automation, reporting and AI integration</li><li>PostgreSQL or MongoDB data layers</li></ul><p>Our public DRF Shapeless Serializers package provides inspectable evidence of advanced serializer and API work.</p>"),
+        ("mongodb", "MongoDB + PostgreSQL data systems", "Practical document and relational database design, indexing, migrations, backups and application integration.", "<p class=\"lead\">We choose the database around the product rather than forcing every workflow into one model.</p><h2>MongoDB</h2><p>A strong fit for evolving content and document-shaped operational data when schema and index discipline are maintained.</p><h2>PostgreSQL</h2><p>A strong fit for relational workflows, reporting, constraints and transaction-heavy systems.</p><h2>Production basics</h2><p>Least-privilege access, migrations, indexes, encrypted backups, restoration tests and query monitoring are part of delivery.</p>"),
+        ("html-css-javascript", "React, Next.js + React Native", "Responsive web and mobile interfaces using React, Next.js, React Native and accessible web foundations.", "<p class=\"lead\">We build interfaces around the user journey, then choose the lightest suitable delivery model.</p><h2>Product interfaces</h2><ul><li>React dashboards and interactive applications</li><li>Next.js websites and full-stack products</li><li>React Native mobile applications</li><li>Semantic HTML, modern CSS, TypeScript and accessible forms</li></ul><p>For content-heavy public pages we may recommend server rendering; for rich workflows we use component-based front ends where they add real value.</p>"),
+    ];
+    for (slug, title, summary, body) in tech {
+        content(db).update_one(doc! {"kind":"tech","slug":slug}, doc! {"$set":{"title":title,"summary":summary,"body":body,"updated_at":now}}).await?;
+    }
+    content(db).update_one(doc! {"kind":"service","slug":"ai-chat-automation"}, doc! {"$set":{
+        "title":"AI-powered support and business solutions",
+        "summary":"AI support, knowledge search and workflow automation with self-hosted or managed models, human hand-off and measurable controls.",
+        "body":"<p class=\"lead\">We turn AI into a bounded business tool: customer support, internal knowledge search, document workflows and product assistance.</p><h2>What we can deliver</h2><ul><li>AI-enabled support with human hand-off and conversation history</li><li>RAG knowledge assistants grounded in approved business content</li><li>Self-hosted open-source AI when privacy, control or predictable usage justify it</li><li>Managed model integrations when speed and capability are the better trade-off</li><li>Classification, summaries, recommendations and workflow automation</li></ul><h2>Production safeguards</h2><p>Permissions, data boundaries, evaluation, cost controls, observability, feedback and escalation are designed with the feature—not added after launch.</p><h2>Start with a focused pilot</h2><p>We select one high-value workflow, define what success means and ship a reviewable first version before expanding.</p>",
+        "updated_at":now
+    }}).await?;
     Ok(())
 }
 
@@ -1407,7 +1493,13 @@ async fn admin_save(
         updated_at: now,
     };
     if item.image.is_empty() {
-        item.image = format!("/media/covers/{}/{}.svg", item.kind, item.slug);
+        item.image = match item.kind.as_str() {
+            "blog" | "insight" => "/static/images/generated/blog-website-scope.webp",
+            "tech" => "/static/images/generated/tech-python.webp",
+            "work" | "testimonial" => "/static/images/generated/work-doappointment.webp",
+            "about" => "/static/images/generated/about-community.webp",
+            _ => "/static/images/small-business-websites.png",
+        }.into();
     }
     if item.image_alt.trim().is_empty() {
         item.image_alt = format!("Editorial image for {}", item.title);
