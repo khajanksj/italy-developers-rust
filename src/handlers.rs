@@ -718,7 +718,7 @@ async fn detail(
     schema: &str,
 ) -> Result<HttpResponse, AppError> {
     let item = one(db, kind, slug).await?;
-    let comments = if kind == "blog" { comment_views(db, slug).await? } else { Vec::new() };
+    let comments = if kind == "blog" { ensure_official_starter(db, slug).await?; comment_views(db, slug).await? } else { Vec::new() };
     let post_likes = if kind == "blog" {
         blog_reactions(db).count_documents(doc! {"target":format!("post:{slug}")}).await? as i64
     } else { 0 };
@@ -794,6 +794,24 @@ async fn comment_views(db: &Database, slug: &str) -> Result<Vec<CommentView>, Ap
     let mut result = Vec::new();
     append(None, 0, &rows, &mut result);
     Ok(result)
+}
+
+async fn ensure_official_starter(db: &Database, slug: &str) -> Result<(), AppError> {
+    if blog_comments(db).find_one(doc! {"post_slug":slug,"user_id":"system:italy-developers"}).await?.is_none() {
+        blog_comments(db).insert_one(BlogComment {
+            id:None,
+            post_slug:slug.into(),
+            parent_id:None,
+            user_id:"system:italy-developers".into(),
+            author_email:"hello@italydevelopers.com".into(),
+            author:"Italy Developers".into(),
+            body:"What would you like us to explain, test or expand in this guide? Share your situation and we’ll keep the discussion practical.".into(),
+            likes:0,
+            published:true,
+            created_at:DateTime::now(),
+        }).await?;
+    }
+    Ok(())
 }
 
 fn authenticated(session: &Session) -> bool {

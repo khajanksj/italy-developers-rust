@@ -27,7 +27,27 @@
     const url = new URL(img.src, location.origin);
     if (url.searchParams.get("v") !== "2") { url.searchParams.set("v", "2"); img.src = `${url.pathname}${url.search}`; }
   });
+  const restorePendingComment = (root = document) => {
+    const form = root.querySelector?.("#comment-form");
+    if (!form || form.hasAttribute("data-requires-auth")) return;
+    try {
+      const pending = JSON.parse(sessionStorage.getItem("pendingBlogComment") || "null");
+      if (!pending || pending.path !== location.pathname) return;
+      form.querySelector('textarea[name="body"]').value = pending.body || "";
+      form.querySelector("[data-parent-id]").value = pending.parentId || "";
+      if (pending.parentId) {
+        const comment = root.querySelector(`#comment-${pending.parentId}`);
+        comment?.querySelector("[data-reply-slot]")?.append(form);
+        const note = form.querySelector("[data-reply-note]");
+        note.hidden = false;
+        note.firstChild.textContent = `Replying to ${pending.author || "this comment"}. `;
+      }
+      sessionStorage.removeItem("pendingBlogComment");
+      form.requestSubmit();
+    } catch { sessionStorage.removeItem("pendingBlogComment"); }
+  };
   refreshGeneratedCovers();
+  restorePendingComment();
   const menu = document.querySelector(".menu");
   const nav = document.querySelector("#nav");
   const syncActiveNavigation = () => {
@@ -61,6 +81,7 @@
       const swap = () => {
         current.replaceWith(next);
         refreshGeneratedCovers(next);
+        restorePendingComment(next);
         document.title = doc.title;
         document.querySelector('meta[name="description"]')?.setAttribute("content", doc.querySelector('meta[name="description"]')?.content || "");
         if (push) history.pushState({}, "", url);
@@ -117,6 +138,20 @@
     if (!a || a.target === "_blank" || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || !sameOrigin(a)) return;
     event.preventDefault();
     navigate(a.href);
+  });
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest?.("#comment-form[data-requires-auth]");
+    if (!form) return;
+    event.preventDefault();
+    const body = form.querySelector('textarea[name="body"]');
+    if (!body.reportValidity()) return;
+    const parentId = form.querySelector("[data-parent-id]")?.value || "";
+    const replyButton = parentId ? document.querySelector(`[data-reply-to="${parentId}"]`) : null;
+    sessionStorage.setItem("pendingBlogComment", JSON.stringify({path:location.pathname,body:body.value,parentId,author:replyButton?.dataset.replyAuthor || ""}));
+    const dialog = document.querySelector("[data-auth-dialog]");
+    const context = dialog?.querySelector("[data-auth-context]");
+    if (context) context.textContent = parentId ? "Sign in once and your reply will be posted under this comment." : "Sign in once and your comment will be posted automatically.";
+    dialog?.showModal();
   });
   const footerContact = document.querySelector(".footer-links > div:last-child");
   if (footerContact && !footerContact.querySelector(".social-links")) {
