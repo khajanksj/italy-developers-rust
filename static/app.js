@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  ["content.css", "detail-enhancements.css", "community.css", "home-content.css"].forEach((file) => {
+  ["content.css", "detail-enhancements.css", "community.css", "home-content.css", "comment-reactive.css"].forEach((file) => {
     if (document.querySelector(`link[href="/static/${file}"]`)) return;
     const stylesheet = document.createElement("link");
     stylesheet.rel = "stylesheet";
@@ -174,6 +174,49 @@
         })
         .catch(() => likeForm.submit())
         .finally(() => { button.disabled = false; button.removeAttribute("aria-busy"); });
+      return;
+    }
+    const commentForm = event.target.closest?.("#comment-form:not([data-requires-auth])");
+    if (commentForm) {
+      event.preventDefault();
+      const textarea = commentForm.querySelector('textarea[name="body"]');
+      if (!textarea.reportValidity()) return;
+      const submit = commentForm.querySelector('button[type="submit"]');
+      const parentId = commentForm.querySelector("[data-parent-id]")?.value || "";
+      const parent = parentId ? document.getElementById(`comment-${parentId}`) : null;
+      submit.disabled = true;
+      submit.setAttribute("aria-busy", "true");
+      fetch(commentForm.action, {method:"POST",body:new URLSearchParams(new FormData(commentForm)),headers:{Accept:"application/json","X-Requested-With":"ItalyDevelopersComment"}})
+        .then((response) => { if (!response.ok) throw new Error("comment failed"); return response.json(); })
+        .then((data) => {
+          const article = document.createElement("article");
+          const parentDepth = parent ? Number((parent.className.match(/depth-(\d+)/) || [0,0])[1]) : -1;
+          article.className = `comment depth-${Math.min(parentDepth + 1, 6)}`;
+          article.id = `comment-${data.id}`;
+          const commentHeader = document.createElement("header");
+          commentHeader.dataset.initial = (data.author || "M").charAt(0).toUpperCase();
+          const name = document.createElement("strong"); name.textContent = data.author;
+          const identity = document.createElement("span"); identity.textContent = "Authenticated member";
+          commentHeader.append(name, identity);
+          const message = document.createElement("p"); message.textContent = data.body;
+          const actions = document.createElement("footer");
+          const likeForm = document.createElement("form"); likeForm.method = "post"; likeForm.action = `${location.pathname}/comments/${data.id}/like`;
+          const token = document.createElement("input"); token.type = "hidden"; token.name = "csrf"; token.value = commentForm.querySelector('input[name="csrf"]').value;
+          const likeButton = document.createElement("button"); likeButton.type = "submit"; likeButton.textContent = "♥ 0 Like";
+          likeForm.append(token, likeButton);
+          const replyButton = document.createElement("button"); replyButton.type = "button"; replyButton.dataset.replyTo = data.id; replyButton.dataset.replyAuthor = data.author; replyButton.textContent = "Reply";
+          actions.append(likeForm, replyButton);
+          const slot = document.createElement("div"); slot.className = "inline-reply-slot"; slot.dataset.replySlot = "";
+          article.append(commentHeader, message, actions, slot);
+          if (parent) parent.insertAdjacentElement("afterend", article); else document.querySelector(".comment-list")?.append(article);
+          textarea.value = "";
+          const status = document.createElement("span"); status.className = "comment-posted-status"; status.setAttribute("role", "status"); status.textContent = parent ? "Reply posted." : "Comment posted.";
+          submit.insertAdjacentElement("afterend", status);
+          setTimeout(() => status.remove(), 2500);
+          textarea.focus({preventScroll:true});
+        })
+        .catch(() => commentForm.submit())
+        .finally(() => { submit.disabled = false; submit.removeAttribute("aria-busy"); });
       return;
     }
     const form = event.target.closest?.("#comment-form[data-requires-auth]");

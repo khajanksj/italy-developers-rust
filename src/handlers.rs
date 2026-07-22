@@ -917,7 +917,7 @@ fn valid_csrf(session: &Session, received: &str) -> Result<(), AppError> {
 #[derive(Deserialize)]
 struct CommentForm { body: String, parent_id: Option<String>, csrf: String }
 
-async fn add_blog_comment(session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<CommentForm>) -> Result<HttpResponse, AppError> {
+async fn add_blog_comment(req: HttpRequest, session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<CommentForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
     let user_id = member_id(&session)?;
     one(&db, "blog", &slug).await?;
@@ -929,7 +929,11 @@ async fn add_blog_comment(session: Session, db: web::Data<Database>, slug: web::
         if blog_comments(&db).find_one(doc! {"_id":parent,"post_slug":slug.as_str(),"published":true}).await?.is_none() { return Err(AppError::BadRequest); }
     }
     let author_email = session.get::<String>("email").map_err(|_| AppError::Forbidden)?.unwrap_or_default();
-    blog_comments(&db).insert_one(BlogComment { id:None, post_slug:slug.to_string(), parent_id, user_id, author_email, author:author.into(), body:body.into(), likes:0, published:true, created_at:DateTime::now() }).await?;
+    let inserted = blog_comments(&db).insert_one(BlogComment { id:None, post_slug:slug.to_string(), parent_id, user_id, author_email, author:author.clone(), body:body.into(), likes:0, published:true, created_at:DateTime::now() }).await?;
+    if wants_json(&req) {
+        let id = inserted.inserted_id.as_object_id().map(|value| value.to_hex()).unwrap_or_default();
+        return Ok(HttpResponse::Created().json(serde_json::json!({"id":id,"author":author,"body":body,"parent_id":parent_id.map(|value| value.to_hex()),"likes":0})));
+    }
     Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, format!("/blog/{}#discussion", slug))).finish())
 }
 
