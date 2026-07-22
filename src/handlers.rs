@@ -378,7 +378,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
     blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
     blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
-    if migrations.find_one(doc! {"key":"editorial-v6"}).await?.is_some() {
+    if migrations.find_one(doc! {"key":"editorial-v7"}).await?.is_some() {
         return Ok(());
     }
     let now = DateTime::now();
@@ -432,6 +432,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     migrations.insert_one(doc! {"key":"editorial-v4","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v5","applied_at":now}).await?;
     migrations.insert_one(doc! {"key":"editorial-v6","applied_at":now}).await?;
+    migrations.insert_one(doc! {"key":"editorial-v7","applied_at":now}).await?;
     Ok(())
 }
 
@@ -485,6 +486,15 @@ async fn apply_editorial_v3(db: &Database, now: DateTime) -> Result<(), AppError
                 content(db).update_one(doc! {"_id":id}, doc! {"$set":{"image":unique_cover,"image_alt":format!("Editorial illustration for {}",item.title)}}).await?;
             }
         }
+    }
+    let photo_assignments = [
+        ("service", "custom-websites-cms", "/static/images/small-business-websites.png"),
+        ("work", "jgob-commerce-community", "/static/images/lean-ecommerce.png"),
+        ("work", "pet-care-ai-upcoming", "/static/images/workflow-automation.png"),
+        ("work", "drf-shapeless-serializers", "/static/images/digital-strategy.png"),
+    ];
+    for (kind, slug, image) in photo_assignments {
+        content(db).update_one(doc! {"kind":kind,"slug":slug}, doc! {"$set":{"image":image}}).await?;
     }
     Ok(())
 }
