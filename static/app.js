@@ -46,8 +46,13 @@
       form.requestSubmit();
     } catch { sessionStorage.removeItem("pendingBlogComment"); }
   };
+  const decorateComments = (root = document) => root.querySelectorAll?.(".comment").forEach((comment) => {
+    const name = comment.querySelector("header strong")?.textContent?.trim() || "M";
+    comment.querySelector("header")?.setAttribute("data-initial", name.charAt(0).toUpperCase());
+  });
   refreshGeneratedCovers();
   restorePendingComment();
+  decorateComments();
   const menu = document.querySelector(".menu");
   const nav = document.querySelector("#nav");
   const syncActiveNavigation = () => {
@@ -82,6 +87,7 @@
         current.replaceWith(next);
         refreshGeneratedCovers(next);
         restorePendingComment(next);
+        decorateComments(next);
         document.title = doc.title;
         document.querySelector('meta[name="description"]')?.setAttribute("content", doc.querySelector('meta[name="description"]')?.content || "");
         if (push) history.pushState({}, "", url);
