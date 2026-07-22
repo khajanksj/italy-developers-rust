@@ -69,9 +69,25 @@
       return;
     }
     const a = event.target.closest("a");
-    if (!a || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || !sameOrigin(a)) return;
+    if (!a || a.target === "_blank" || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || !sameOrigin(a)) return;
     event.preventDefault();
     navigate(a.href);
   });
+  const footerContact = document.querySelector(".footer-links > div:last-child");
+  if (footerContact && !footerContact.querySelector(".social-links")) {
+    const social = document.createElement("div");
+    social.className = "social-links";
+    social.setAttribute("aria-label", "Italy Developers social media");
+    social.innerHTML = '<a href="/login">Member sign in →</a>';
+    footerContact.appendChild(social);
+    fetch("/api/social-links").then((response) => response.ok ? response.json() : {}).then((links) => {
+      Object.entries(links).forEach(([name, href]) => {
+        const link = document.createElement("a");
+        link.href = href; link.target = "_blank"; link.rel = "noopener";
+        link.textContent = `${name[0].toUpperCase()}${name.slice(1)} ↗`;
+        social.insertBefore(link, social.lastElementChild);
+      });
+    }).catch(() => {});
+  }
   addEventListener("popstate", () => navigate(location.href, false));
 })();

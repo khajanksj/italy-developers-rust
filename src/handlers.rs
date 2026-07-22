@@ -101,6 +101,10 @@ struct BlogComment {
     id: Option<ObjectId>,
     post_slug: String,
     parent_id: Option<ObjectId>,
+    #[serde(default)]
+    user_id: String,
+    #[serde(default)]
+    author_email: String,
     author: String,
     body: String,
     likes: i64,
@@ -130,6 +134,8 @@ struct BlogReaction {
 struct AdminUser {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     id: Option<ObjectId>,
+    #[serde(default)]
+    name: String,
     email: String,
     password_hash: String,
     role: String,
@@ -148,7 +154,17 @@ struct HomeSettings {
     insight_limit: i64,
     show_testimonials: bool,
     testimonial_limit: i64,
+    #[serde(default = "default_github_url")]
+    github_url: String,
+    #[serde(default)]
+    linkedin_url: String,
+    #[serde(default)]
+    instagram_url: String,
+    #[serde(default)]
+    youtube_url: String,
 }
+
+fn default_github_url() -> String { "https://github.com/khajanksj".into() }
 
 impl Default for HomeSettings {
     fn default() -> Self {
@@ -162,6 +178,10 @@ impl Default for HomeSettings {
             insight_limit: 3,
             show_testimonials: true,
             testimonial_limit: 6,
+            github_url: default_github_url(),
+            linkedin_url: String::new(),
+            instagram_url: String::new(),
+            youtube_url: String::new(),
         }
     }
 }
@@ -208,6 +228,17 @@ struct DetailTemplate {
     csrf: String,
     comments: Vec<CommentView>,
     post_likes: i64,
+    authenticated: bool,
+    viewer_name: String,
+}
+
+#[derive(Template)]
+#[template(path = "member/auth.html")]
+struct MemberAuthTemplate {
+    register: bool,
+    next: String,
+    error: String,
+    csrf: String,
 }
 #[derive(Template)]
 #[template(path = "contact.html")]
@@ -316,6 +347,7 @@ pub async fn user_command(db: &Database, args: &[String]) -> anyhow::Result<()> 
     let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)?;
     let user = AdminUser {
         id: None,
+        name: email.split('@').next().unwrap_or("Member").into(),
         email: email.clone(),
         password_hash: hash,
         role: role.into(),
@@ -347,6 +379,13 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
         .route("/blog/{slug}/comment", web::post().to(add_blog_comment))
         .route("/blog/{slug}/like", web::post().to(toggle_blog_like))
         .route("/blog/{slug}/comments/{id}/like", web::post().to(toggle_comment_like))
+        .route("/login", web::get().to(member_login))
+        .route("/login", web::post().to(member_auth))
+        .route("/register", web::get().to(member_register))
+        .route("/register", web::post().to(member_create))
+        .route("/logout", web::post().to(member_logout))
+        .route("/social/{platform}", web::get().to(social_redirect))
+        .route("/api/social-links", web::get().to(social_links))
         .route("/contact", web::get().to(contact_page))
         .route("/contact", web::post().to(submit_contact))
         .route("/media/covers/{kind}/{slug}.svg", web::get().to(content_cover))
@@ -690,6 +729,8 @@ async fn detail(
         csrf: csrf(session)?,
         comments,
         post_likes,
+        authenticated: authenticated(session),
+        viewer_name: session.get::<String>("name").ok().flatten().unwrap_or_default(),
     })
 }
 async fn service_detail(
@@ -755,10 +796,12 @@ async fn comment_views(db: &Database, slug: &str) -> Result<Vec<CommentView>, Ap
     Ok(result)
 }
 
-fn visitor_id(session: &Session) -> Result<String, AppError> {
-    let id = session.get::<String>("visitor").map_err(|_| AppError::BadRequest)?.unwrap_or_else(|| ObjectId::new().to_hex());
-    session.insert("visitor", &id).map_err(|_| AppError::BadRequest)?;
-    Ok(id)
+fn authenticated(session: &Session) -> bool {
+    session.get::<String>("user_id").ok().flatten().filter(|id| !id.is_empty()).is_some()
+}
+
+fn member_id(session: &Session) -> Result<String, AppError> {
+    session.get::<String>("user_id").map_err(|_| AppError::Forbidden)?.filter(|id| !id.is_empty()).ok_or(AppError::Forbidden)
 }
 
 fn valid_csrf(session: &Session, received: &str) -> Result<(), AppError> {
@@ -768,19 +811,21 @@ fn valid_csrf(session: &Session, received: &str) -> Result<(), AppError> {
 }
 
 #[derive(Deserialize)]
-struct CommentForm { author: String, body: String, parent_id: Option<String>, csrf: String }
+struct CommentForm { body: String, parent_id: Option<String>, csrf: String }
 
 async fn add_blog_comment(session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<CommentForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
+    let user_id = member_id(&session)?;
     one(&db, "blog", &slug).await?;
-    let author = form.author.trim();
+    let author = session.get::<String>("name").map_err(|_| AppError::Forbidden)?.unwrap_or_default();
     let body = form.body.trim();
     if !(2..=80).contains(&author.chars().count()) || !(3..=2000).contains(&body.chars().count()) { return Err(AppError::BadRequest); }
     let parent_id = form.parent_id.as_deref().filter(|v| !v.is_empty()).map(ObjectId::parse_str).transpose().map_err(|_| AppError::BadRequest)?;
     if let Some(parent) = parent_id {
         if blog_comments(&db).find_one(doc! {"_id":parent,"post_slug":slug.as_str(),"published":true}).await?.is_none() { return Err(AppError::BadRequest); }
     }
-    blog_comments(&db).insert_one(BlogComment { id:None, post_slug:slug.to_string(), parent_id, author:author.into(), body:body.into(), likes:0, published:true, created_at:DateTime::now() }).await?;
+    let author_email = session.get::<String>("email").map_err(|_| AppError::Forbidden)?.unwrap_or_default();
+    blog_comments(&db).insert_one(BlogComment { id:None, post_slug:slug.to_string(), parent_id, user_id, author_email, author:author.into(), body:body.into(), likes:0, published:true, created_at:DateTime::now() }).await?;
     Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, format!("/blog/{}#discussion", slug))).finish())
 }
 
@@ -788,7 +833,7 @@ async fn add_blog_comment(session: Session, db: web::Data<Database>, slug: web::
 struct LikeForm { csrf: String }
 
 async fn toggle_reaction(session: &Session, db: &Database, target: String) -> Result<bool, AppError> {
-    let visitor = visitor_id(session)?;
+    let visitor = member_id(session)?;
     if let Some(existing) = blog_reactions(db).find_one(doc! {"target":&target,"visitor":&visitor}).await? {
         if let Some(id) = existing.id { blog_reactions(db).delete_one(doc! {"_id":id}).await?; }
         Ok(false)
@@ -954,6 +999,7 @@ async fn admin_auth(
             session
                 .insert("email", &user.email)
                 .map_err(|_| AppError::BadRequest)?;
+            session.insert("name", if user.name.is_empty() { user.email.split('@').next().unwrap_or("Member") } else { &user.name }).map_err(|_| AppError::BadRequest)?;
             session
                 .insert("role", &user.role)
                 .map_err(|_| AppError::BadRequest)?;
@@ -979,6 +1025,80 @@ async fn admin_logout(session: Session) -> HttpResponse {
     HttpResponse::SeeOther()
         .insert_header((header::LOCATION, "/"))
         .finish()
+}
+
+#[derive(Deserialize, Default)]
+struct MemberAuthQuery { next: Option<String> }
+
+#[derive(Deserialize)]
+struct MemberLoginForm { email: String, password: String, next: String, csrf: String }
+
+#[derive(Deserialize)]
+struct MemberRegisterForm { name: String, email: String, password: String, next: String, csrf: String }
+
+fn safe_next(value: &str) -> String {
+    if value.starts_with('/') && !value.starts_with("//") { value.into() } else { "/".into() }
+}
+
+async fn member_login(session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    html(MemberAuthTemplate { register:false, next:safe_next(query.next.as_deref().unwrap_or("/")), error:String::new(), csrf:csrf(&session)? })
+}
+
+async fn member_register(session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    html(MemberAuthTemplate { register:true, next:safe_next(query.next.as_deref().unwrap_or("/")), error:String::new(), csrf:csrf(&session)? })
+}
+
+async fn member_auth(session: Session, db: web::Data<Database>, form: web::Form<MemberLoginForm>) -> Result<HttpResponse, AppError> {
+    valid_csrf(&session, &form.csrf)?;
+    let email = form.email.trim().to_lowercase();
+    if let Some(user) = users(&db).find_one(doc! {"email":&email,"active":true}).await? {
+        if bcrypt::verify(&form.password, &user.password_hash).unwrap_or(false) {
+            session.renew();
+            session.insert("user_id", user.id.map(|id| id.to_hex()).unwrap_or_default()).map_err(|_| AppError::BadRequest)?;
+            session.insert("email", &user.email).map_err(|_| AppError::BadRequest)?;
+            session.insert("name", if user.name.is_empty() { user.email.split('@').next().unwrap_or("Member") } else { &user.name }).map_err(|_| AppError::BadRequest)?;
+            session.insert("role", &user.role).map_err(|_| AppError::BadRequest)?;
+            return Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, safe_next(&form.next))).finish());
+        }
+    }
+    Ok(HttpResponse::Unauthorized().content_type("text/html; charset=utf-8").body(MemberAuthTemplate { register:false, next:safe_next(&form.next), error:"Email or password is incorrect.".into(), csrf:csrf(&session)? }.render()?))
+}
+
+async fn member_create(session: Session, db: web::Data<Database>, form: web::Form<MemberRegisterForm>) -> Result<HttpResponse, AppError> {
+    valid_csrf(&session, &form.csrf)?;
+    let name = form.name.trim();
+    let email = form.email.trim().to_lowercase();
+    if !(2..=80).contains(&name.chars().count()) || !email.contains('@') || email.len() > 254 || form.password.len() < 12 {
+        return Ok(HttpResponse::UnprocessableEntity().content_type("text/html; charset=utf-8").body(MemberAuthTemplate { register:true, next:safe_next(&form.next), error:"Use your real name, a valid email and a password of at least 12 characters.".into(), csrf:csrf(&session)? }.render()?));
+    }
+    if users(&db).count_documents(doc! {"email":&email}).await? > 0 {
+        return Ok(HttpResponse::Conflict().content_type("text/html; charset=utf-8").body(MemberAuthTemplate { register:true, next:safe_next(&form.next), error:"An account already exists for this email.".into(), csrf:csrf(&session)? }.render()?));
+    }
+    let inserted = users(&db).insert_one(AdminUser { id:None, name:name.into(), email:email.clone(), password_hash:bcrypt::hash(&form.password, bcrypt::DEFAULT_COST).map_err(|_| AppError::BadRequest)?, role:"member".into(), active:true, created_at:DateTime::now() }).await?;
+    session.renew();
+    session.insert("user_id", inserted.inserted_id.as_object_id().map(|id| id.to_hex()).unwrap_or_default()).map_err(|_| AppError::BadRequest)?;
+    session.insert("email", email).map_err(|_| AppError::BadRequest)?;
+    session.insert("name", name).map_err(|_| AppError::BadRequest)?;
+    session.insert("role", "member").map_err(|_| AppError::BadRequest)?;
+    Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, safe_next(&form.next))).finish())
+}
+
+async fn member_logout(session: Session) -> HttpResponse { session.purge(); HttpResponse::SeeOther().insert_header((header::LOCATION, "/")).finish() }
+
+async fn social_redirect(db: web::Data<Database>, platform: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let settings = home_settings(&db).await?;
+    let url = match platform.as_str() { "github" => settings.github_url, "linkedin" => settings.linkedin_url, "instagram" => settings.instagram_url, "youtube" => settings.youtube_url, _ => return Err(AppError::NotFound) };
+    if !(url.starts_with("https://") || url.starts_with("http://")) { return Err(AppError::NotFound); }
+    Ok(HttpResponse::TemporaryRedirect().insert_header((header::LOCATION, url)).finish())
+}
+
+async fn social_links(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
+    let settings = home_settings(&db).await?;
+    let mut links = serde_json::Map::new();
+    for (name, url) in [("github", settings.github_url), ("linkedin", settings.linkedin_url), ("instagram", settings.instagram_url), ("youtube", settings.youtube_url)] {
+        if url.starts_with("https://") || url.starts_with("http://") { links.insert(name.into(), serde_json::Value::String(format!("/social/{name}"))); }
+    }
+    Ok(HttpResponse::Ok().insert_header((header::CACHE_CONTROL, "no-cache")).json(links))
 }
 #[derive(Deserialize, Default)]
 struct AdminQuery {
@@ -1058,6 +1178,15 @@ struct HomeSettingsForm {
     insight_limit: i64,
     show_testimonials: Option<String>,
     testimonial_limit: i64,
+    github_url: String,
+    linkedin_url: String,
+    instagram_url: String,
+    youtube_url: String,
+}
+
+fn clean_social_url(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with("https://") || value.starts_with("http://") { value.into() } else { String::new() }
 }
 
 async fn admin_homepage_save(
@@ -1078,6 +1207,10 @@ async fn admin_homepage_save(
         insight_limit: form.insight_limit.clamp(1, 12),
         show_testimonials: form.show_testimonials.is_some(),
         testimonial_limit: form.testimonial_limit.clamp(1, 12),
+        github_url: clean_social_url(&form.github_url),
+        linkedin_url: clean_social_url(&form.linkedin_url),
+        instagram_url: clean_social_url(&form.instagram_url),
+        youtube_url: clean_social_url(&form.youtube_url),
     };
     home_settings_collection(&db)
         .replace_one(doc! {"key":"home"}, settings)

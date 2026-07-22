@@ -44,6 +44,14 @@
         <label class="field"><span>Maximum testimonials</span><input type="number" name="testimonial_limit" min="1" max="12" value="{{ settings.testimonial_limit }}" required></label>
         <a class="settings-action" href="/admin/content/new?type=testimonial">＋ Create testimonial</a>
       </section>
+      <section class="homepage-setting-card">
+        <div><span>05</span><div><h2>Social media</h2><p>Public profile links shown across the website</p></div></div>
+        <label class="field"><span>GitHub URL</span><input type="url" name="github_url" value="{{ settings.github_url }}" placeholder="https://github.com/..."></label>
+        <label class="field"><span>LinkedIn URL</span><input type="url" name="linkedin_url" value="{{ settings.linkedin_url }}" placeholder="https://linkedin.com/company/..."></label>
+        <label class="field"><span>Instagram URL</span><input type="url" name="instagram_url" value="{{ settings.instagram_url }}" placeholder="https://instagram.com/..."></label>
+        <label class="field"><span>YouTube URL</span><input type="url" name="youtube_url" value="{{ settings.youtube_url }}" placeholder="https://youtube.com/@..."></label>
+        <small>Leave a platform empty to disable its destination. Links are resolved from MongoDB, so no deployment is needed after editing.</small>
+      </section>
     </form>
   </main>
 </body>
