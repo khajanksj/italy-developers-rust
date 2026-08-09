@@ -1,0 +1,12 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block heading %}Dashboard{% endblock %}
+{% block content %}
+<div class="admin-stat-grid">
+  <a class="admin-stat" href="/admin/leads"><strong>{{ leads_total }}</strong><span>Total leads</span></a>
+  <a class="admin-stat" href="/admin/leads?status=new"><strong>{{ leads_new }}</strong><span>New leads</span></a>
+  {% for row in content_counts %}
+  <a class="admin-stat" href="/admin/content/{{ row.key }}"><strong>{{ row.count }}</strong><span>{{ row.label }}</span></a>
+  {% endfor %}
+</div>
+{% endblock %}

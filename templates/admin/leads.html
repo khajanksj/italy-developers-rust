@@ -1,0 +1,50 @@
+{% extends "admin/base.html" %}
+{% block title %}Leads{% endblock %}
+{% block heading %}Leads{% endblock %}
+{% block content %}
+<div class="admin-filters">
+  <a href="/admin/leads" class="{% if status_filter.is_empty() %}active{% endif %}">All</a>
+  <a href="/admin/leads?status=new" class="{% if status_filter == "new" %}active{% endif %}">New</a>
+  <a href="/admin/leads?status=contacted" class="{% if status_filter == "contacted" %}active{% endif %}">Contacted</a>
+  <a href="/admin/leads?status=closed" class="{% if status_filter == "closed" %}active{% endif %}">Closed</a>
+  <a href="/admin/leads?status=spam" class="{% if status_filter == "spam" %}active{% endif %}">Spam</a>
+</div>
+{% if leads.is_empty() %}
+<p class="admin-empty">No leads yet.</p>
+{% else %}
+<div class="admin-table-wrap">
+<table class="admin-table">
+  <thead><tr><th>Date</th><th>Name</th><th>Email</th><th>Company</th><th>Service</th><th>Message</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+    {% for lead in leads %}
+    <tr>
+      <td>{{ lead.created_at }}</td>
+      <td>{{ lead.name }}</td>
+      <td><a href="mailto:{{ lead.email }}">{{ lead.email }}</a></td>
+      <td>{{ lead.company }}</td>
+      <td>{{ lead.service }}</td>
+      <td class="admin-message">{{ lead.message }}</td>
+      <td>
+        <form method="post" action="/admin/leads/{{ lead.id }}/status" class="admin-inline-form">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <select name="status" class="admin-autosubmit">
+            <option value="new" {% if lead.status == "new" %}selected{% endif %}>New</option>
+            <option value="contacted" {% if lead.status == "contacted" %}selected{% endif %}>Contacted</option>
+            <option value="closed" {% if lead.status == "closed" %}selected{% endif %}>Closed</option>
+            <option value="spam" {% if lead.status == "spam" %}selected{% endif %}>Spam</option>
+          </select>
+        </form>
+      </td>
+      <td>
+        <form method="post" action="/admin/leads/{{ lead.id }}/delete" class="admin-inline-form admin-confirm-delete">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="admin-danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

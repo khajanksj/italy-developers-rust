@@ -1,0 +1,32 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ heading }}{% endblock %}
+{% block heading %}{{ heading }}{% endblock %}
+{% block content %}
+<form method="post" action="{{ action }}" class="admin-form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% for field in fields %}
+  <label class="{% if field.kind == "textarea" || field.kind == "markdown" %}wide{% endif %}">
+    {{ field.label }}{% if field.required %} *{% endif %}
+    {% if field.kind == "textarea" %}
+    <textarea name="{{ field.name }}" rows="4" {% if field.required %}required{% endif %}>{{ field.value }}</textarea>
+    {% else if field.kind == "markdown" %}
+    <textarea name="{{ field.name }}" rows="14" class="admin-markdown" {% if field.required %}required{% endif %}>{{ field.value }}</textarea>
+    {% else if field.kind == "number" %}
+    <input type="number" name="{{ field.name }}" value="{{ field.value }}" {% if field.required %}required{% endif %}>
+    {% else %}
+    <input type="text" name="{{ field.name }}" value="{{ field.value }}" {% if field.required %}required{% endif %}>
+    {% endif %}
+  </label>
+  {% endfor %}
+  <div class="admin-form-actions">
+    <button class="button" type="submit">Save <span>↗</span></button>
+    <a class="text-link" href="{{ back }}">Cancel</a>
+  </div>
+</form>
+{% if let Some(delete_url) = delete_action %}
+<form method="post" action="{{ delete_url }}" class="admin-confirm-delete admin-form-delete">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="admin-danger" type="submit">Delete this item</button>
+</form>
+{% endif %}
+{% endblock %}

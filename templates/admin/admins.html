@@ -1,0 +1,32 @@
+{% extends "admin/base.html" %}
+{% block title %}Admin users{% endblock %}
+{% block heading %}Admin users{% endblock %}
+{% block content %}
+<div class="admin-table-wrap">
+<table class="admin-table">
+  <thead><tr><th>Username</th><th>Created</th><th></th></tr></thead>
+  <tbody>
+    {% for a in admins %}
+    <tr>
+      <td>{{ a.username }}</td>
+      <td>{{ a.created_at }}</td>
+      <td>
+        <form method="post" action="/admin/admins/{{ a.id }}/delete" class="admin-inline-form admin-confirm-delete">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="admin-danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h2 class="admin-subheading">Add an admin</h2>
+<form method="post" action="/admin/admins/new" class="admin-form">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Username<input type="text" name="username" minlength="3" required></label>
+  <label>Password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label>
+  <div class="admin-form-actions"><button class="button" type="submit">Create admin <span>↗</span></button></div>
+</form>
+{% endblock %}

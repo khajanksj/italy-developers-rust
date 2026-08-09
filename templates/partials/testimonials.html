@@ -1,0 +1,24 @@
+{% if !testimonials.is_empty() %}
+<section class="testimonials">
+  <p class="kicker">What clients say</p>
+  <h2>Trusted by teams who needed it done right.</h2>
+  <div class="testimonial-carousel">
+    <div class="testimonial-track">
+      {% for t in testimonials %}
+      <blockquote class="testimonial-slide">
+        <p>&ldquo;{{ t.quote }}&rdquo;</p>
+        <footer>
+          <div class="testimonial-avatar">{% if !t.photo.is_empty() %}<img src="{{ t.photo }}" alt="{{ t.author }}" loading="lazy">{% else %}<span>{{ t.initials }}</span>{% endif %}</div>
+          <div><strong>{{ t.author }}</strong><span>{{ t.role }}, {{ t.company }}</span></div>
+        </footer>
+      </blockquote>
+      {% endfor %}
+    </div>
+    <div class="testimonial-controls">
+      <button type="button" class="carousel-prev" aria-label="Previous testimonial">←</button>
+      <div class="testimonial-dots"></div>
+      <button type="button" class="carousel-next" aria-label="Next testimonial">→</button>
+    </div>
+  </div>
+</section>
+{% endif %}

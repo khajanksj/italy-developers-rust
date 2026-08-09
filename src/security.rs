@@ -1,5 +1,7 @@
 use std::{future::{ready, Ready}, pin::Pin, task::{Context, Poll}};
+use actix_session::Session;
 use actix_web::{dev::{Service, ServiceRequest, ServiceResponse, Transform}, Error, HttpMessage};
+use crate::error::AppError;
 
 pub const CSP:&str = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; manifest-src 'self'; upgrade-insecure-requests";
 
@@ -16,3 +18,6 @@ impl<S,B> Service<ServiceRequest> for RequestIdMiddleware<S> where S:Service<Ser
 }
 
 pub fn csrf_valid(expected:&str,received:&str)->bool { expected.len()==received.len() && constant_time_eq::constant_time_eq(expected.as_bytes(),received.as_bytes()) }
+
+fn random_token()->String{format!("{:x}{:x}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos())}
+pub fn get_or_create_csrf(session:&Session)->Result<String,AppError>{let token=session.get::<String>("csrf").map_err(|_|AppError::BadRequest)?.unwrap_or_else(random_token);session.insert("csrf",&token).map_err(|_|AppError::BadRequest)?;Ok(token)}
