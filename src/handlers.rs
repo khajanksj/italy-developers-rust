@@ -4,12 +4,13 @@ use actix_web::{http::header, web, HttpRequest, HttpResponse};
 use askama::Template;
 use futures_util::{StreamExt, TryStreamExt};
 use mongodb::{
-    bson::{doc, oid::ObjectId, DateTime},
+    bson::{doc, oid::ObjectId, DateTime, Document},
     options::IndexOptions,
     Database,
     IndexModel,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use validator::Validate;
 
 use crate::{config::Config, error::AppError, security};
@@ -271,6 +272,7 @@ struct AdminDashboardTemplate {
     role: String,
     can_delete: bool,
     toast: String,
+    hidden_by_limit: HashSet<String>,
 }
 #[derive(Template)]
 #[template(path = "admin/editor.html")]
@@ -840,6 +842,72 @@ async fn list_home_kind(
         .try_collect()
         .await?)
 }
+
+/// Every "Published + Show on home" item is a *candidate* for its home-page section,
+/// but each section only renders its top N by Display order (its configured limit).
+/// Toggling "Show on home" on a lower-priority item silently does nothing if higher-
+/// priority items already fill the section — this computes which candidates lose out,
+/// so the admin table can explain why an item isn't actually appearing.
+async fn hidden_by_home_limit(
+    db: &Database,
+    settings: &HomeSettings,
+) -> Result<HashSet<String>, AppError> {
+    async fn overflow(
+        db: &Database,
+        filter: Document,
+        enabled: bool,
+        limit: i64,
+    ) -> Result<Vec<String>, AppError> {
+        if !enabled {
+            return Ok(Vec::new());
+        }
+        let mut all: Vec<ContentItem> = content(db).find(filter).await?.try_collect().await?;
+        all.sort_by_key(|item| item.order);
+        Ok(all
+            .into_iter()
+            .skip(limit.clamp(0, 24) as usize)
+            .filter_map(|item| item.id.map(|id| id.to_hex()))
+            .collect())
+    }
+    let mut hidden = HashSet::new();
+    hidden.extend(
+        overflow(
+            db,
+            doc! {"kind":"service","published":true,"featured":true},
+            settings.show_services,
+            settings.service_limit,
+        )
+        .await?,
+    );
+    hidden.extend(
+        overflow(
+            db,
+            doc! {"kind":"work","published":true,"featured":true},
+            settings.show_work,
+            settings.work_limit,
+        )
+        .await?,
+    );
+    hidden.extend(
+        overflow(
+            db,
+            doc! {"kind":"testimonial","published":true,"featured":true},
+            settings.show_testimonials,
+            settings.testimonial_limit,
+        )
+        .await?,
+    );
+    hidden.extend(
+        overflow(
+            db,
+            doc! {"kind":{"$in":["insight","blog"]},"published":true,"featured":true},
+            settings.show_insights,
+            settings.insight_limit,
+        )
+        .await?,
+    );
+    Ok(hidden)
+}
 async fn one(db: &Database, kind: &str, slug: &str) -> Result<ContentItem, AppError> {
     ensure_seed(db).await?;
     content(db)
@@ -1397,6 +1465,8 @@ async fn admin_dashboard(
     } else {
         Vec::new()
     };
+    let home_settings_current = home_settings(&db).await?;
+    let hidden_by_limit = hidden_by_home_limit(&db, &home_settings_current).await?;
     html(AdminDashboardTemplate {
         items,
         leads: enquiries,
@@ -1408,6 +1478,7 @@ async fn admin_dashboard(
         role: role(&session),
         can_delete: can_manage(&session),
         toast: query.toast.clone().unwrap_or_default(),
+        hidden_by_limit,
     })
 }
 async fn admin_new(session: Session) -> Result<HttpResponse, AppError> {

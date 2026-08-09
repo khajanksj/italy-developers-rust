@@ -2,6 +2,15 @@
   "use strict";
   const $ = (s, c = document) => c.querySelector(s),
     $$ = (s, c = document) => [...c.querySelectorAll(s)];
+  // htmx's outerHTML swap removes the checked <input> and inserts a fresh one,
+  // so the browser drops focus to <body> and jumps the scroll position. Put
+  // focus back on the new switch without letting that focus() call re-scroll.
+  document.body.addEventListener("htmx:afterSettle", (event) => {
+    const swapped = event.target;
+    if (swapped instanceof HTMLElement && swapped.matches(".table-switch")) {
+      swapped.querySelector("input")?.focus({ preventScroll: true });
+    }
+  });
   const adminFixes = document.createElement("link");
   adminFixes.rel = "stylesheet";
   adminFixes.href = "/static/admin-fixes.css?v=2";
