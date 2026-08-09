@@ -409,6 +409,7 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
         .route("/admin/content/{id}/edit", web::get().to(admin_edit))
         .route("/admin/content/save", web::post().to(admin_save))
         .route("/admin/content/{id}/delete", web::post().to(admin_delete))
+        .route("/admin/content/{id}/toggle/{field}", web::post().to(admin_toggle))
         .route("/admin/homepage", web::get().to(admin_homepage))
         .route("/admin/homepage", web::post().to(admin_homepage_save))
         .route(
@@ -1754,6 +1755,51 @@ async fn admin_delete(
         .insert_header((header::LOCATION, "/admin?toast=deleted"))
         .finish())
 }
+
+/// Inline htmx toggle for the "Published" / "Show on home" switches in the content table.
+/// Flips the field server-side (ignoring whatever the checkbox posted) and returns the
+/// updated switch fragment so htmx can swap it in place without a page reload.
+async fn admin_toggle(
+    session: Session,
+    db: web::Data<Database>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, AppError> {
+    if !can_edit(&session) {
+        return Err(AppError::Forbidden);
+    }
+    let (id, field) = path.into_inner();
+    if field != "published" && field != "featured" {
+        return Err(AppError::BadRequest);
+    }
+    if field == "published" && !can_manage(&session) {
+        return Err(AppError::Forbidden);
+    }
+    let oid = ObjectId::parse_str(&id).map_err(|_| AppError::BadRequest)?;
+    let item = content(&db).find_one(doc! {"_id":oid}).await?.ok_or(AppError::NotFound)?;
+    let now = DateTime::now();
+    let checked = if field == "published" {
+        let value = !item.published;
+        content(&db).update_one(doc! {"_id":oid}, doc! {"$set":{"published":value,"updated_at":now}}).await?;
+        value
+    } else {
+        let value = !item.featured;
+        content(&db).update_one(doc! {"_id":oid}, doc! {"$set":{"featured":value,"updated_at":now}}).await?;
+        value
+    };
+    Ok(HttpResponse::Ok().content_type("text/html; charset=utf-8").body(table_switch(&id, &field, checked, can_manage(&session))))
+}
+
+fn table_switch(id: &str, field: &str, checked: bool, can_manage: bool) -> String {
+    let disabled = field == "published" && !can_manage;
+    format!(
+        r##"<label class="table-switch" id="switch-{field}-{id}"><input type="checkbox" hx-post="/admin/content/{id}/toggle/{field}" hx-target="#switch-{field}-{id}" hx-swap="outerHTML"{checked}{disabled}><i></i></label>"##,
+        field = field,
+        id = id,
+        checked = if checked { " checked" } else { "" },
+        disabled = if disabled { " disabled" } else { "" },
+    )
+}
+
 #[derive(Deserialize)]
 struct StatusForm {
     status: String,
