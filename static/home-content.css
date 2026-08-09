@@ -1,0 +1,18 @@
+.testimonial-section{padding:110px 5vw;background:#ede7dc;border-block:1px solid var(--rule)}
+.testimonial-section>header{display:grid;grid-template-columns:minmax(280px,1fr) minmax(300px,1.15fr);gap:20px 8vw;align-items:end;max-width:1500px;margin:0 auto 55px}
+.testimonial-section>header .kicker{grid-column:1/-1;margin:0}
+.testimonial-section>header h2{margin:0;font-size:clamp(44px,5.5vw,78px);line-height:.96;letter-spacing:-.06em}
+.testimonial-section>header>p:last-child{max-width:560px;margin:0;font-size:18px;line-height:1.65;color:#5d584f}
+.testimonial-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;max-width:1500px;margin:auto}
+.testimonial-card{display:grid;grid-template-columns:minmax(180px,38%) 1fr;min-width:0;min-height:330px;overflow:hidden;background:#fff;border:1px solid var(--rule);transition:transform .2s ease,box-shadow .2s ease}
+.testimonial-card:hover{transform:translateY(-3px);box-shadow:0 18px 40px rgba(55,45,30,.1)}
+.testimonial-card .testimonial-image{width:100%;height:100%;min-height:330px;object-fit:cover;margin:0;border:0}
+.testimonial-copy{display:flex;min-width:0;padding:32px;flex-direction:column}
+.testimonial-copy .kicker{margin:0 0 20px}
+.testimonial-card blockquote{margin:0;font:clamp(19px,1.7vw,25px)/1.48 Georgia,serif}
+.testimonial-card footer{display:block;margin-top:auto;padding:26px 0 0;background:transparent;color:var(--ink);border-top:1px solid var(--rule)}
+.testimonial-card footer strong,.testimonial-card footer small{display:block}
+.testimonial-card footer strong{font-size:18px}
+.testimonial-card footer small{margin-top:7px;color:var(--green);font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+@media(max-width:1050px){.testimonial-grid{grid-template-columns:1fr}.testimonial-card{grid-template-columns:260px 1fr}}
+@media(max-width:680px){.testimonial-section{padding:70px 22px}.testimonial-section>header{grid-template-columns:1fr}.testimonial-card{grid-template-columns:1fr}.testimonial-card .testimonial-image{height:240px;min-height:0}.testimonial-copy{padding:26px}.testimonial-card blockquote{font-size:20px}}

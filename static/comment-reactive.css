@@ -1,0 +1,11 @@
+.comment-posted-status {
+  align-self: center;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.comment-form button[aria-busy="true"] {
+  cursor: wait;
+  opacity: .65;
+}

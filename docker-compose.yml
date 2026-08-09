@@ -1,25 +1,25 @@
 services:
   db:
-    image: mongo:7
+    image: mongo:8
     environment:
-      MONGO_INITDB_ROOT_USERNAME: italy
-      MONGO_INITDB_ROOT_PASSWORD: local-development-only
+      MONGO_INITDB_DATABASE: italy_developers
     volumes: [mongo_data:/data/db]
-    healthcheck: {test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"], interval: 5s, timeout: 3s, retries: 10}
+    healthcheck: {test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping').ok"], interval: 5s, timeout: 5s, retries: 20}
   web:
     build: .
     depends_on: {db: {condition: service_healthy}}
     environment:
-      MONGODB_URI: mongodb://italy:local-development-only@db:27017/italy_developers?authSource=admin
-      MONGODB_DB: italy_developers
-      APP_SECRET_KEY: local-development-key-change-before-production-00000000000000000000
-      ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: change-this-local-password
+      MONGODB_URL: mongodb://db:27017
+      MONGODB_DATABASE: italy_developers
+      APP_SECRET_KEY: development-only-secret-000000000000000000000000000000000000000000000000
+      PUBLIC_URL: http://localhost:8080
+      UPLOAD_DIR: /app/uploads
       COOKIE_SECURE: "false"
       RUST_LOG: info
     ports: ["8080:8080"]
     read_only: true
     tmpfs: [/tmp]
+    volumes: [uploads:/app/uploads]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
-volumes: {mongo_data: {}}
+volumes: {mongo_data: {}, uploads: {}}

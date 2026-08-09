@@ -1,99 +1,50 @@
 {% extends "base.html" %}
-{% block title %}Italy Developers | Secure Rust & MongoDB Web Development{% endblock %}
-{% block description %}Security-focused Rust, Actix Web, MongoDB, website and custom software development for ambitious companies.{% endblock %}
-{% block og_title %}Italy Developers | Secure Rust Development{% endblock %}
+{% block og_title %}Affordable Websites for Italian Small Businesses{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/home-content.css">{% endblock %}
 {% block content %}
 <section class="hero">
   <div class="hero-copy">
-    <p class="eyebrow"><span>Independent Rust studio</span><span>India · Italy · Worldwide</span></p>
-    <h1>We build secure digital products that move business forward.</h1>
-    <p class="intro">Premium websites, applications and custom software engineered with Rust and MongoDB for ambitious companies.</p>
-    <div class="actions"><a class="button" href="/contact">Start a project <span>↗</span></a><a class="text-link" href="/work">View our work →</a></div>
+    <p class="eyebrow"><span>Worldwide developer community</span><span>Built exclusively for Italy</span></p>
+    <h1>Full-stack products and responsible AI, built for Italy.</h1>
+    <p class="intro">A worldwide developer community building practical websites, mobile apps, business systems, APIs and AI-powered support exclusively for Italy’s local businesses and individuals.</p>
+    <div class="actions"><a class="button" href="/contact">Get a practical quote <span>↗</span></a><a class="text-link" href="/work">See real examples →</a></div>
+    <div class="trust-row"><span>Clear scope</span><span>Own your content</span><span>Built for local search</span></div>
   </div>
-  <div class="hero-art" aria-label="Abstract secure software interface">
-    <div class="green-block"></div>
-    <div class="red-arc"></div>
-    <div class="terminal">
-      <div class="terminal-head"><i></i><i></i><i></i><b>ACTIX / SECURE</b></div>
-      <div class="terminal-body">
-        <p><span>01</span><b>HttpServer</b>::new(move || App::new())</p>
-        <p><span>02</span>.wrap(SecurityHeaders)</p>
-        <p><span>03</span>.wrap(RateLimiter)</p>
-        <p><span>04</span>.wrap(CsrfProtection)</p>
-        <p><span>05</span>.data(MongoDatabase)</p>
-        <strong>100<small>SECURITY</small></strong>
-      </div>
-    </div>
-  </div>
+  <div class="hero-art"><div class="green-block"></div><div class="red-arc"></div><div class="value-card"><small>A lean launch plan</small><strong>Start useful.<br>Grow with evidence.</strong><ul><li>Mobile-first website</li><li>Local SEO foundations</li><li>Simple content management</li><li>No unnecessary subscriptions</li></ul></div></div>
 </section>
+<section class="rail"><a href="/services">01 <span>Web &amp; mobile</span></a><a href="/services">02 <span>Business systems</span></a><a href="/services">03 <span>AI support</span></a><div>✓ <span>Designed for realistic small-business budgets.</span></div></section>
 
-<section class="rail">
-  <a href="/services">◫ <span>Rust Web Platforms</span></a>
-  <a href="/services">▣ <span>Secure APIs</span></a>
-  <a href="/services">◇ <span>Custom Software</span></a>
-  <div>✓ <span>Security by design.<br>Performance by default.</span></div>
-</section>
+<section class="section split"><div><p class="kicker">Engineering range</p><h2>One team for product, data and AI.</h2></div><div><p>Python, Django, FastAPI, GraphQL, Rust, Actix Web, Askama, React, Next.js and React Native—supported by PostgreSQL, MongoDB, Docker and production-ready delivery.</p><p>For AI projects we can integrate managed models or deploy suitable open-source models under your control. The architecture follows the real requirement, not a technology trend.</p><a class="text-link" href="/tech-stack">Explore our technology stack →</a></div></section>
 
-<section class="stats">
-  <div><strong>{{ stats.years_active }}+</strong><span>Years building products</span></div>
-  <div><strong>{{ stats.projects_delivered }}+</strong><span>Projects delivered</span></div>
-  <div><strong>{{ stats.countries_served }}+</strong><span>Countries served</span></div>
-  <div><strong>{{ stats.response_time }}</strong><span>Typical response time</span></div>
-</section>
+{% if services.len() > 0 %}
+<section class="section split"><div><p class="kicker">Services</p><h2>Invest first in what customers actually use.</h2></div><div><p>We cut through bloated proposals and focus on the pages, messages and workflows that can earn trust, generate enquiries or save your team time.</p><a class="text-link" href="/services">Explore every service →</a></div></section>
+<section class="media-grid">{% for item in services %}<article class="media-card"><a href="/services/{{ item.slug }}">{% if !item.image.is_empty() %}<img src="{{ item.image }}" alt="{{ item.image_alt }}">{% else %}<div class="image-placeholder"><span>{{ loop.index }}</span></div>{% endif %}<p class="kicker">{{ item.eyebrow }}</p><h3>{{ item.title }}</h3><p>{{ item.summary }}</p><span class="text-link">View service →</span></a></article>{% endfor %}</section>
+{% endif %}
 
-<section class="section split">
-  <div><p class="kicker">What we do</p><h2>From first idea to secure production.</h2></div>
-  <div><p>One senior team for strategy, interface design and robust Actix Web engineering on a MongoDB foundation. We plan for real users—and hostile traffic.</p><a class="text-link" href="/services">Explore services →</a></div>
-</section>
+<section class="dark"><p class="kicker">A community with a clear boundary</p><h2>Worldwide contributors.<br>Italy-only impact.</h2><div class="cards"><article><span>01</span><h3>Open worldwide</h3><p>Developers, designers, testers, writers and responsible AI practitioners can contribute from any country.</p></article><article><span>02</span><h3>Dedicated to Italy</h3><p>We accept client work exclusively from Italy’s local businesses, professionals, individuals and community organisations.</p></article><article><span>03</span><h3>Real capability</h3><p>Projects are matched to skills already demonstrated in our portfolio—without inflated scope or invented results.</p></article></div></section>
 
-<section class="section">
-  <p class="kicker">Services</p>
-  <h2>Engineering, not templates.</h2>
-  <div class="service-grid">
-    {% for s in services %}
-    <article><span>0{{ loop.index }}</span><h3>{{ s.title }}</h3><p>{{ s.summary }}</p><small>{{ s.stack }}</small></article>
-    {% endfor %}
-  </div>
-  <a class="text-link" href="/services">See all services →</a>
-</section>
+{% if work.len() > 0 %}
+<section class="section"><p class="kicker">Selected work</p><h2>Useful outcomes for businesses like yours.</h2></section>
+<section class="media-grid work-grid">{% for item in work %}<article class="media-card"><a href="/work/{{ item.slug }}">{% if !item.image.is_empty() %}<img src="{{ item.image }}" alt="{{ item.image_alt }}">{% else %}<div class="image-placeholder work-art"><span>{{ loop.index }}</span></div>{% endif %}<p class="kicker">{{ item.eyebrow }}</p><h3>{{ item.title }}</h3><p>{{ item.summary }}</p><span class="text-link">Read case study →</span></a></article>{% endfor %}</section>
+{% endif %}
 
-<section class="section alt">
-  <p class="kicker">Recent work</p>
-  <h2>Products shipped for real businesses.</h2>
-  <div class="work-grid">
-    {% for item in work %}
-    <article>
-      {% if !item.image.is_empty() %}<img src="{{ item.image }}" alt="{{ item.title }}" loading="lazy" width="640" height="420">{% endif %}
-      <h3>{{ item.title }}</h3><p>{{ item.summary }}</p><small>{{ item.stack }}</small>
+{% if testimonials.len() > 0 %}
+<section class="testimonial-section" id="testimonials">
+  <header><p class="kicker">Proof from the work</p><h2>Capability you can inspect, not promises you have to trust.</h2><p>Implemented product features from real portfolio projects. These are factual summaries, not invented client quotes.</p></header>
+  <div class="testimonial-grid">
+    {% for item in testimonials %}
+    <article class="testimonial-card">
+      {% if !item.image.is_empty() %}<img class="testimonial-image" src="{{ item.image }}" alt="{{ item.image_alt }}" loading="lazy" width="1200" height="900">{% endif %}
+      <div class="testimonial-copy"><p class="kicker">{{ item.eyebrow }}</p><blockquote>{{ item.summary }}</blockquote><footer><strong>{{ item.title }}</strong>{% if !item.cta.is_empty() %}<small>{{ item.cta }}</small>{% endif %}</footer></div>
     </article>
     {% endfor %}
   </div>
-  <a class="text-link" href="/work">See all work →</a>
 </section>
+{% endif %}
 
-<section class="dark">
-  <p class="kicker">Our engineering standard</p>
-  <h2>Memory-safe foundations.<br>Defence in depth.</h2>
-  <div class="cards">
-    <article><span>01</span><h3>Secure defaults</h3><p>Strict CSP, secure cookies, CSRF protection, Argon2 password hashing and minimal data exposure.</p></article>
-    <article><span>02</span><h3>Operational resilience</h3><p>Rate limits, request bounds, health checks, structured logs and graceful failure modes.</p></article>
-    <article><span>03</span><h3>Search ready</h3><p>Server-rendered semantic pages with unique metadata and fast client-side transitions.</p></article>
-  </div>
-</section>
+{% if insights.len() > 0 %}
+<section class="section split"><div><p class="kicker">Ideas for owners</p><h2>Understand where your budget will work hardest.</h2></div><div>{% for item in insights %}<a class="article-row" href="/{% if item.kind == "blog" %}blog{% else %}insights{% endif %}/{{ item.slug }}"><small>{{ item.eyebrow }}</small><strong>{{ item.title }}</strong><span>→</span></a>{% endfor %}</div></section>
+{% endif %}
 
-{% include "partials/testimonials.html" %}
-{% include "partials/faq.html" %}
-
-<section class="section">
-  <p class="kicker">Latest insights</p>
-  <h2>Notes from the studio.</h2>
-  <div class="insights-grid">
-    {% for post in insights %}
-    <a class="insight-card" href="/insights/{{ post.slug }}"><span>{{ post.category }}</span><h3>{{ post.title }}</h3><p>{{ post.summary }}</p></a>
-    {% endfor %}
-  </div>
-  <a class="text-link" href="/insights">Read all insights →</a>
-</section>
-
-<section class="page-cta"><p class="kicker">Have a difficult problem?</p><h2>Let's build what's next.</h2><a class="button" href="/contact">Talk to the studio <span>↗</span></a></section>
+<section class="page-cta"><p class="kicker">A focused first engagement</p><h2>Start with a website launch, automation sprint or AI-support pilot.</h2><p>Tell us the business problem and budget. We will propose a small, paid first release with clear scope, ownership and a route to grow.</p><a class="button" href="/contact">Request a practical proposal <span>↗</span></a></section>
 {% endblock %}

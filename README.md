@@ -1,47 +1,76 @@
-# Italy Developers — Rust / Actix Web / MongoDB
+# Italy Developers — MongoDB CMS
 
-Production-oriented, server-rendered company website built with Rust, Actix Web, Askama and MongoDB. JavaScript enhances navigation without replacing crawlable server routes, so links, browser history and SEO work without client-side rendering.
+Server-rendered Rust/Actix website and content-management system for Italy Developers. It targets Italian small businesses and independent professionals seeking practical, affordable websites, e-commerce and automation.
 
-Site content — services, case studies, testimonials, team, FAQs and insight articles — lives in MongoDB and is managed through a built-in admin panel, not hardcoded in templates.
+## Included
 
-## Security design
+- MongoDB-backed services, work, tech stack, about sections, insights, blog posts and contact leads.
+- Role-aware admin dashboard at `/admin` with live validation, publishing controls, ordering, rich visual/HTML editing, SEO fields, image uploads and lead management.
+- Expanded service, portfolio, insight, blog, tech stack, about and contact experiences.
+- Per-entry title, description, keywords, Open Graph data and Schema.org structured data.
+- Dynamic XML sitemap, robots policy, semantic server rendering and crawlable detail routes.
+- Signed HTTP-only sessions, CSRF-protected public contact form, rate limiting, security headers and bounded uploads.
+- Non-root, read-only application container with persistent MongoDB and upload volumes.
 
-- Memory-safe Rust application with strict CSP and no inline JavaScript or CSS.
-- HSTS, `nosniff`, clickjacking denial, restrictive Permissions Policy, COOP and CORP.
-- Signed, HTTP-only, `SameSite=Strict`, `__Host-` session cookies.
-- Session-bound CSRF tokens compared in constant time, on every public and admin form.
-- Global IP rate limiting, 32 KiB form/JSON limits and bounded field validation.
-- Honeypot spam field, normalized email input and parameterized MongoDB queries.
-- Admin passwords hashed with Argon2; login runs the verify step against a dummy hash for non-existent usernames to reduce timing side-channels.
-- Every admin route re-checks the session against the database on each request.
-- Generic public errors, request IDs and structured logs without submitted form values.
-- Non-root/read-only container and dropped Linux capabilities.
-- Readiness/liveness endpoints and dependency audit in CI.
-
-No web application can promise immunity from every attacker. Production still requires TLS at the proxy, secret rotation, least-privilege database credentials, backups, monitoring, WAF/DDoS controls, dependency updates and regular security review.
-
-## Admin panel
-
-Visit `/admin/login`. The first admin account is created automatically on startup from `ADMIN_USERNAME`/`ADMIN_PASSWORD` if the `admins` collection is empty; afterwards, manage further admin accounts from `/admin/admins`. From the panel you can:
-
-- Review, filter, update the status of, and delete contact leads (`/admin/leads`).
-- Edit services, work/case studies, testimonials, team members, FAQs and insight articles (`/admin/content/<type>`).
-- Edit site-wide settings — contact details and headline stats (`/admin/settings`).
-
-## Run locally
+## Run with Docker
 
 ```bash
-cp .env.example .env
-# Replace APP_SECRET_KEY and ADMIN_PASSWORD; for local HTTP only keep COOKIE_SECURE=false.
-docker compose up --build
+docker compose up --build -d
 ```
 
-Open `http://localhost:8080`. Indexes are created and starter content is seeded into MongoDB on first boot.
+Open:
 
-## Production variables
+- Website: `http://localhost:8080`
+- Admin: `http://localhost:8080/admin/login`
 
-`MONGODB_URI`, `MONGODB_DB`, `APP_SECRET_KEY` (at least 64 random bytes), `ADMIN_USERNAME`/`ADMIN_PASSWORD` (bootstrap only — remove after the first admin exists), `COOKIE_SECURE=true`, `HOST`, `PORT`, `WEB_WORKERS` and `RUST_LOG`.
+Create the first account from the project directory (passwords must be at least 12 characters):
 
-## Deployment
+```powershell
+docker compose run --rm web create-superuser owner@example.com "use-a-strong-password"
+docker compose run --rm web create-admin manager@example.com "use-a-strong-password"
+docker compose run --rm web create-staff editor@example.com "use-a-strong-password"
+```
 
-Deploy the Docker image to Fly.io, Render, Railway, AWS, Google Cloud Run or another container host with a managed MongoDB database (e.g. MongoDB Atlas). Vercel's normal Next.js deployment is not an Actix Web server runtime; use a container platform for this repository.
+- `superuser` and `admin` can publish, delete content and manage enquiries.
+- `staff` can create and edit content, but cannot publish, delete or access enquiries.
+
+Accounts sign in with email and password. Passwords are stored as bcrypt hashes. Change `APP_SECRET_KEY` before any shared or production deployment; Compose credentials are for local development only.
+
+Useful commands:
+
+```bash
+docker compose logs -f web
+docker compose ps
+docker compose down
+```
+
+Use `docker compose down -v` only when you intentionally want to erase MongoDB content and uploaded images.
+
+## Production settings
+
+Configure `MONGODB_URL`, `MONGODB_DATABASE`, `APP_SECRET_KEY`, `PUBLIC_URL`, `COOKIE_SECURE=true`, `HOST`, `PORT`, `WEB_WORKERS`, `UPLOAD_DIR` and `RUST_LOG`.
+
+Use TLS, a strong database user/password, encrypted backups, restricted network access, object storage or a persistent upload volume, secret rotation, monitoring and regular dependency updates.
+
+## Production deployment
+
+The production override enables authenticated MongoDB, secure cookies, readiness checks, automatic restarts, bounded container logs and loopback-only web binding for a TLS reverse proxy.
+
+1. Copy `.env.production.example` to `.env.production` and replace every `CHANGE_ME` value. Keep this file off Git. Use URL-safe characters for the MongoDB password because it is embedded in the connection URL.
+2. Point `PUBLIC_URL` at the final HTTPS domain. Configure Caddy, Nginx or your hosting provider to terminate TLS and proxy to `127.0.0.1:8080`.
+3. Build and start the stack:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml ps
+```
+
+4. Create the first administrator:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.yml -f docker-compose.prod.yml run --rm web create-superuser owner@example.com "use-a-unique-12+-character-password"
+```
+
+5. Verify `https://your-domain/health/live`, `https://your-domain/health/ready`, the public pages and `/admin/login`.
+
+Back up both named volumes: `mongo_data` contains content, users and enquiries; `uploads` contains admin-uploaded images. Test restoration before relying on a backup policy. For updates, pull the reviewed code and repeat the `up --build -d` command. Do not run `docker compose down -v` in production.

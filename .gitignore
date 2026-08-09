@@ -1,8 +1,9 @@
 /target
 .env
-.localdb/
+.env.production
 .idea
 .vscode
 *.log
 .DS_Store
 coverage/
+.localdb/

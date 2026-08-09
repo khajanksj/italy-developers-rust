@@ -1,0 +1,57 @@
+.about-db-intro {
+  padding: 70px 5vw;
+  border-bottom: 1px solid var(--rule);
+}
+
+.about-db-intro h2 {
+  max-width: 900px;
+  margin: 18px 0;
+  font-size: clamp(42px, 6vw, 84px);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+}
+
+.about-db-intro > p:last-child {
+  max-width: 760px;
+  color: #625f59;
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+.about-db-section {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.4fr);
+  gap: 8vw;
+  padding: 90px 5vw;
+  border-bottom: 1px solid var(--rule);
+}
+
+.about-db-heading {
+  align-self: start;
+  position: sticky;
+  top: 120px;
+}
+
+.about-db-heading h2 {
+  margin: 15px 0 22px;
+  font-size: clamp(40px, 5vw, 72px);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+}
+
+.about-db-heading > p:not(.kicker) {
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.about-db-section img {
+  width: 100%;
+  max-height: 560px;
+  margin-bottom: 40px;
+  object-fit: cover;
+}
+
+@media (max-width: 850px) {
+  .about-db-section { grid-template-columns: 1fr; padding: 60px 22px; }
+  .about-db-heading { position: static; }
+}
