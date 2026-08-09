@@ -1,28 +1,5 @@
 (() => {
   "use strict";
-  ["content.css", "detail-enhancements.css", "community.css", "home-content.css", "comment-reactive.css"].forEach((file) => {
-    if (document.querySelector(`link[href="/static/${file}"]`)) return;
-    const stylesheet = document.createElement("link");
-    stylesheet.rel = "stylesheet";
-    stylesheet.href = `/static/${file}`;
-    document.head.append(stylesheet);
-  });
-  const navStyles = document.createElement("link");
-  navStyles.rel = "stylesheet";
-  navStyles.href = "/static/nav-state.css";
-  document.head.append(navStyles);
-  const communityStyles = document.createElement("link");
-  communityStyles.rel = "stylesheet";
-  communityStyles.href = "/static/community-interactive.css";
-  document.head.append(communityStyles);
-  const mediaStyles = document.createElement("link");
-  mediaStyles.rel = "stylesheet";
-  mediaStyles.href = "/static/media-fixes.css";
-  document.head.append(mediaStyles);
-  const reactionStyles = document.createElement("link");
-  reactionStyles.rel = "stylesheet";
-  reactionStyles.href = "/static/reaction-state.css";
-  document.head.append(reactionStyles);
   document.addEventListener("error", (event) => {
     const img = event.target;
     if (!(img instanceof HTMLImageElement) || img.dataset.fallbackApplied) return;
