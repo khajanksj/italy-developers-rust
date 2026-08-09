@@ -28,6 +28,9 @@ pub struct ContentItem {
     pub eyebrow: String,
     #[serde(default)]
     pub summary: String,
+    /// Unique "at a glance" sidebar highlight for this item's detail page.
+    #[serde(default)]
+    pub glance: String,
     #[serde(default)]
     pub body: String,
     #[serde(default)]
@@ -66,6 +69,7 @@ impl Default for ContentItem {
             title: String::new(),
             eyebrow: String::new(),
             summary: String::new(),
+            glance: String::new(),
             body: String::new(),
             image: String::new(),
             image_alt: String::new(),
@@ -417,12 +421,19 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
     blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
     blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
+    if migrations.find_one(doc! {"key":"unique-glance-v13"}).await?.is_some() {
+        return Ok(());
+    }
     if migrations.find_one(doc! {"key":"image-consistency-insights-v12"}).await?.is_some() {
+        apply_unique_glance_v13(db).await?;
+        migrations.insert_one(doc! {"key":"unique-glance-v13","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     if migrations.find_one(doc! {"key":"market-positioning-v11"}).await?.is_some() {
         apply_image_consistency_and_insights_v12(db, DateTime::now()).await?;
         migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":DateTime::now()}).await?;
+        apply_unique_glance_v13(db).await?;
+        migrations.insert_one(doc! {"key":"unique-glance-v13","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     if migrations.find_one(doc! {"key":"real-photos-v10"}).await?.is_some() {
@@ -430,6 +441,8 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
         migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":DateTime::now()}).await?;
         apply_image_consistency_and_insights_v12(db, DateTime::now()).await?;
         migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":DateTime::now()}).await?;
+        apply_unique_glance_v13(db).await?;
+        migrations.insert_one(doc! {"key":"unique-glance-v13","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     if migrations.find_one(doc! {"key":"editorial-v9"}).await?.is_some() {
@@ -439,6 +452,8 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
         migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":DateTime::now()}).await?;
         apply_image_consistency_and_insights_v12(db, DateTime::now()).await?;
         migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":DateTime::now()}).await?;
+        apply_unique_glance_v13(db).await?;
+        migrations.insert_one(doc! {"key":"unique-glance-v13","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     let now = DateTime::now();
@@ -468,6 +483,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
                 title: title.into(),
                 eyebrow: eyebrow.into(),
                 summary: summary.into(),
+                glance: String::new(),
                 body: body.into(),
                 image: format!("/media/covers/{kind}/{slug}.svg"),
                 image_alt: format!("Editorial image for {}", title),
@@ -503,6 +519,8 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":now}).await?;
     apply_image_consistency_and_insights_v12(db, now).await?;
     migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":now}).await?;
+    apply_unique_glance_v13(db).await?;
+    migrations.insert_one(doc! {"key":"unique-glance-v13","applied_at":now}).await?;
     Ok(())
 }
 
@@ -602,6 +620,7 @@ async fn apply_image_consistency_and_insights_v12(db: &Database, now: DateTime) 
             title: title.into(),
             eyebrow: eyebrow.into(),
             summary: summary.into(),
+            glance: String::new(),
             body: body.into(),
             image: format!("/media/covers/insight/{slug}.svg"),
             image_alt: format!("Editorial cover for {title}"),
@@ -616,6 +635,64 @@ async fn apply_image_consistency_and_insights_v12(db: &Database, now: DateTime) 
             updated_at: now,
         };
         content(db).replace_one(doc! {"kind":"insight","slug":slug}, item).upsert(true).await?;
+    }
+    Ok(())
+}
+
+/// One specific "at a glance" sentence per published item — not a template with a
+/// swapped-out word. Every one references a concrete fact about that item, and several
+/// cross-link the portfolio evidence a claim is based on.
+async fn apply_unique_glance_v13(db: &Database) -> Result<(), AppError> {
+    let glances: &[(&str, &str, &str)] = &[
+        ("about", "our-approach", "Every engagement follows the same rule: worldwide talent, one client market. Nothing in our portfolio is an invented case study."),
+        ("about", "join-the-community", "Contributors join from any time zone; every paid project they touch still serves a business or person in Italy."),
+
+        ("blog", "rust-actix-production-checklist", "The exact checklist we run before any Actix Web service goes live behind this domain, not a generic \"best practices\" list."),
+        ("blog", "designing-secure-cms", "Written while building this site's own admin panel: role separation, upload hardening and recoverable mistakes."),
+        ("blog", "mongodb-content-modeling", "The access-pattern rules we actually used when designing this site's own MongoDB collections."),
+        ("blog", "django-rest-framework-dynamic-serializers", "The reasoning behind our open-source drf-shapeless-serializers package, explained in plain language."),
+        ("blog", "nested-comments-data-model", "The exact data model powering the comment threads and likes under this very post."),
+        ("blog", "docker-compose-production-overrides", "Three Compose override failures we've actually hit in production, and the fix for each."),
+        ("blog", "server-rendered-seo-basics", "No plugins, no tricks: the server-rendered fundamentals that let a crawler actually read a page."),
+        ("blog", "accessible-admin-forms", "Patterns lifted directly from this site's own content editor, where our team fills in long forms daily."),
+        ("blog", "api-ready-python-dashboard", "How we structure a Flet interface so it survives contact with real Django API responses."),
+        ("blog", "small-business-website-scope", "The scoping conversation we have with every small-business client before a single page gets designed."),
+
+        ("insight", "quanto-costa-un-sito-web-in-italia", "Five questions to ask before comparing two website quotes side by side, not a price list."),
+        ("insight", "come-scegliere-un-partner-web-in-italia", "What to check before you sign, based on the handovers that go wrong when a partnership ends badly."),
+        ("insight", "gdpr-cookie-base-sito-piccola-impresa", "A starting checklist, not legal advice, for owners who need the basics right before calling a lawyer."),
+        ("insight", "noleggiare-o-possedere-il-sito-web", "The exact questions that separate a business that should rent a builder from one that needs a custom build."),
+
+        ("service", "websites-ecommerce-booking", "Covers everything from a clinic's booking calendar to a producer's checkout: see DoAppointment and JGOB in our portfolio."),
+        ("service", "custom-business-software", "The same discipline behind StoreMate's inventory system and the car-parking platform, applied to your operation."),
+        ("service", "apps-digital-products", "From the music app to the gaming platform in our portfolio: one process for turning an idea into a released product."),
+        ("service", "ai-chat-automation", "Built with the same human hand-off and visible-uncertainty safeguards we designed for the Pet Care AI platform."),
+        ("service", "apis-integrations-backends", "The same API discipline behind our published drf-shapeless-serializers package and StoreMate's backend."),
+        ("service", "modernisation-rescue-support", "Our first deliverable is always an honest audit: what to keep, what's risky and what a rewrite would actually cost."),
+
+        ("tech", "rust-actix", "Running this website right now — Actix Web is handling the request that loaded this very sentence."),
+        ("tech", "python-django-drf", "The stack behind StoreMate, JGOB and our published DRF Shapeless Serializers package."),
+        ("tech", "mongodb", "This site's own content, leads and comments live in MongoDB collections designed with the rules explained here."),
+        ("tech", "docker-deployment", "The exact multi-stage build and Compose setup this website ships with — see our public repository."),
+        ("tech", "html-css-javascript", "Our choice for interactive dashboards and mobile apps, kept separate from server-rendered pages like this one."),
+        ("tech", "flet-python", "Powers the Python-native admin tools we build when a team needs a desktop-capable interface without a full web stack."),
+        ("tech", "git-github-ci", "The same review and CI discipline that gates every change to this website's own public repository."),
+
+        ("work", "italy-developers-cms", "The site you are reading right now — its full source is public on GitHub, not a mock-up."),
+        ("work", "drf-shapeless-serializers", "A real, published PyPI package with documentation on Read the Docs, not a private demo."),
+        ("work", "doappointment-platform", "A working booking flow for professionals — the same pattern referenced on our websites-and-booking service page."),
+        ("work", "learning-management-system", "Role-based access for learners, teachers and admins — the pattern behind our custom-software service page."),
+        ("work", "jgob-commerce-community", "Combines causes, volunteering and Razorpay checkout in one Django platform: proof behind our commerce service page."),
+        ("work", "storemate-crm-inventory", "A documented, tested backend with OTP auth and low-stock alerts; the private repository is available on request."),
+        ("work", "ai-chat-support", "Conversation interface plus operator hand-off — the architecture referenced on our AI-automation service page."),
+        ("work", "music-application", "A media-discovery product showing our approach to library, playback and account-experience design."),
+        ("work", "coinprofit-plus", "A dashboard-first product covering account records and administrative control — evidence for our software service page."),
+        ("work", "gaming-platform", "Player accounts, progression state and admin content — evidence of interactive-product capability."),
+        ("work", "car-parking-system", "Full entry, exit and occupancy workflow — the same operational-systems pattern behind our custom-software page."),
+        ("work", "pet-care-ai-upcoming", "Currently in development: probabilistic audio analysis with visible uncertainty, not a finished claim."),
+    ];
+    for (kind, slug, glance) in glances {
+        content(db).update_one(doc! {"kind":*kind,"slug":*slug}, doc! {"$set":{"glance":*glance}}).await?;
     }
     Ok(())
 }
@@ -659,7 +736,7 @@ async fn apply_editorial_v3(db: &Database, now: DateTime) -> Result<(), AppError
         ("blog","small-business-website-scope","How to scope a useful small-business website","A practical way to choose pages, proof and workflows without promising features the team cannot maintain.","<p class=\"lead\">Begin with the customer decision and the action the business can reliably fulfil.</p><h2>Map the essential questions</h2><p>Who is the service for? What problem does it solve? Where is it available? What evidence builds trust? What happens after contact?</p><h2>Prioritise the working core</h2><p>Launch the strongest service pages, real work, about information and a dependable enquiry path before advanced personalization or automation.</p><h2>Keep ownership clear</h2><p>The business should control its domain, content, accounts and data. Document ongoing costs and choose technology the team can support.</p>","Project planning","/static/images/lean-ecommerce.png")
     ];
     for (order, (kind, slug, title, summary, body, eyebrow, _image)) in entries.into_iter().enumerate() {
-        let item = ContentItem { id:None, kind:kind.into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:body.into(), image:format!("/media/covers/{kind}/{slug}.svg"), image_alt:format!("Editorial illustration for {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"Rust, Python, Django, APIs, CMS, Docker, web development".into(), cta:"Discuss a practical project".into(), featured:kind == "service" || kind == "work" || (kind == "blog" && order < 18), published:true, order:order as i32, created_at:now, updated_at:now };
+        let item = ContentItem { id:None, kind:kind.into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:body.into(), image:format!("/media/covers/{kind}/{slug}.svg"), image_alt:format!("Editorial illustration for {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"Rust, Python, Django, APIs, CMS, Docker, web development".into(), cta:"Discuss a practical project".into(), featured:kind == "service" || kind == "work" || (kind == "blog" && order < 18), published:true, order:order as i32, created_at:now, updated_at:now };
         content(db).replace_one(doc! {"kind":kind,"slug":slug}, item).upsert(true).await?;
     }
     let seeded: Vec<ContentItem> = content(db).find(doc! {"published":true}).await?.try_collect().await?;
@@ -694,7 +771,7 @@ async fn apply_service_v8(db: &Database, now: DateTime) -> Result<(), AppError> 
         ("modernisation-rescue-support","Product modernisation, rescue and ongoing support","Take over an unfinished, fragile or outdated application, understand what is valuable and move it toward a maintainable release.","<p class=\"lead\">You may already have code, data and users—but no reliable path forward. We can audit the product and improve it without automatically recommending a full rewrite.</p><h2>When this service helps</h2><ul><li>A previous developer or agency is no longer available</li><li>Deployment is unreliable or undocumented</li><li>The interface is difficult on mobile</li><li>Security, permissions or backups are unclear</li><li>New features are slow because the structure is fragile</li><li>A prototype needs production foundations</li></ul><h2>Our first deliverable</h2><p>A technical and product assessment: what works, what is risky, what should be preserved and a phased recovery plan. Critical access, secrets and backups are addressed before cosmetic changes.</p><h2>Possible next phases</h2><p>Bug fixing, UI modernisation, API cleanup, database migration, containerisation, tests, performance work, security hardening, documentation and a controlled production release.</p><h3>No forced rewrite</h3><p>We recommend replacement only when evidence shows that repair would cost more or leave unacceptable risk.</p>","Audit · repair · evolve","/media/covers/service/modernisation-rescue-support.svg")
     ];
     for (order, (slug, title, summary, body, eyebrow, image)) in services.into_iter().enumerate() {
-        let item = ContentItem { id:None, kind:"service".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:body.into(), image:image.into(), image_alt:format!("Italy Developers service: {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"custom software Italy, application development, AI integration, websites, APIs".into(), cta:"Tell us what you want to build".into(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
+        let item = ContentItem { id:None, kind:"service".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:body.into(), image:image.into(), image_alt:format!("Italy Developers service: {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"custom software Italy, application development, AI integration, websites, APIs".into(), cta:"Tell us what you want to build".into(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
         content(db).replace_one(doc! {"kind":"service","slug":slug}, item).upsert(true).await?;
     }
     Ok(())
@@ -711,7 +788,7 @@ async fn apply_project_proof_v9(db: &Database, now: DateTime) -> Result<(), AppE
         ("pet-care-proof","Pet Care AI","Upcoming · Responsible AI","Owner-scoped pet profiles and probabilistic dog audio analysis designed with visible uncertainty and clear safety boundaries.","/media/covers/work/pet-care-ai-upcoming.svg")
     ];
     for (order, (slug, title, eyebrow, summary, image)) in proof.into_iter().enumerate() {
-        let item = ContentItem { id:None, kind:"testimonial".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), body:"Verified portfolio evidence. No client quote or performance claim is implied.".into(), image:image.into(), image_alt:format!("{title} project preview"), seo_title:String::new(), seo_description:String::new(), keywords:String::new(), cta:"View the work".into(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
+        let item = ContentItem { id:None, kind:"testimonial".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:"Verified portfolio evidence. No client quote or performance claim is implied.".into(), image:image.into(), image_alt:format!("{title} project preview"), seo_title:String::new(), seo_description:String::new(), keywords:String::new(), cta:"View the work".into(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
         content(db).replace_one(doc! {"kind":"testimonial","slug":slug}, item).upsert(true).await?;
     }
     Ok(())
@@ -1529,6 +1606,7 @@ async fn admin_save(
         title: f.get("title").cloned().unwrap_or_default().trim().into(),
         eyebrow: f.get("eyebrow").cloned().unwrap_or_default(),
         summary: f.get("summary").cloned().unwrap_or_default().trim().into(),
+        glance: f.get("glance").cloned().unwrap_or_default().trim().into(),
         body: f.get("body").cloned().unwrap_or_default(),
         image,
         image_alt: f.get("image_alt").cloned().unwrap_or_default(),
