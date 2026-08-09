@@ -736,6 +736,7 @@ async fn home(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
         .await?,
     })
 }
+#[allow(clippy::too_many_arguments)]
 async fn collection_page(
     db: &Database,
     kind: &str,
