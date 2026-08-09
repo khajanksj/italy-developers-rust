@@ -417,12 +417,19 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
     blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
     blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
+    if migrations.find_one(doc! {"key":"image-consistency-insights-v12"}).await?.is_some() {
+        return Ok(());
+    }
     if migrations.find_one(doc! {"key":"market-positioning-v11"}).await?.is_some() {
+        apply_image_consistency_and_insights_v12(db, DateTime::now()).await?;
+        migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     if migrations.find_one(doc! {"key":"real-photos-v10"}).await?.is_some() {
         apply_market_positioning_v11(db).await?;
         migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":DateTime::now()}).await?;
+        apply_image_consistency_and_insights_v12(db, DateTime::now()).await?;
+        migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     if migrations.find_one(doc! {"key":"editorial-v9"}).await?.is_some() {
@@ -430,6 +437,8 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
         migrations.insert_one(doc! {"key":"real-photos-v10","applied_at":DateTime::now()}).await?;
         apply_market_positioning_v11(db).await?;
         migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":DateTime::now()}).await?;
+        apply_image_consistency_and_insights_v12(db, DateTime::now()).await?;
+        migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":DateTime::now()}).await?;
         return Ok(());
     }
     let now = DateTime::now();
@@ -492,6 +501,8 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     migrations.insert_one(doc! {"key":"real-photos-v10","applied_at":now}).await?;
     apply_market_positioning_v11(db).await?;
     migrations.insert_one(doc! {"key":"market-positioning-v11","applied_at":now}).await?;
+    apply_image_consistency_and_insights_v12(db, now).await?;
+    migrations.insert_one(doc! {"key":"image-consistency-insights-v12","applied_at":now}).await?;
     Ok(())
 }
 
@@ -562,6 +573,50 @@ async fn apply_market_positioning_v11(db: &Database) -> Result<(), AppError> {
         "body":"<p class=\"lead\">We turn AI into a bounded business tool: customer support, internal knowledge search, document workflows and product assistance.</p><h2>What we can deliver</h2><ul><li>AI-enabled support with human hand-off and conversation history</li><li>RAG knowledge assistants grounded in approved business content</li><li>Self-hosted open-source AI when privacy, control or predictable usage justify it</li><li>Managed model integrations when speed and capability are the better trade-off</li><li>Classification, summaries, recommendations and workflow automation</li></ul><h2>Production safeguards</h2><p>Permissions, data boundaries, evaluation, cost controls, observability, feedback and escalation are designed with the feature—not added after launch.</p><h2>Start with a focused pilot</h2><p>We select one high-value workflow, define what success means and ship a reviewable first version before expanding.</p>",
         "updated_at":now
     }}).await?;
+    Ok(())
+}
+
+/// Two fixes: (1) a project's own proof card should show the same photo as its work item,
+/// not an unrelated stock image; (2) "insights" had one lonely article next to ten blog
+/// posts, so it adds three more buyer-guide pieces in the same voice.
+async fn apply_image_consistency_and_insights_v12(db: &Database, now: DateTime) -> Result<(), AppError> {
+    let photo_fixes = [
+        ("testimonial", "italy-developers-proof", "/static/images/generated/work-rust-cms.webp"),
+        ("testimonial", "storemate-proof", "/static/images/generated/work-storemate.webp"),
+        ("service", "apis-integrations-backends", "/static/images/workflow-automation.png"),
+    ];
+    for (kind, slug, image) in photo_fixes {
+        content(db).update_one(doc! {"kind":kind,"slug":slug}, doc! {"$set":{"image":image,"updated_at":now}}).await?;
+    }
+
+    let insights = [
+        ("come-scegliere-un-partner-web-in-italia","How to choose a website partner in Italy without regret","A practical evaluation framework for comparing freelancers, agencies and platforms before you sign anything.","<p class=\"lead\">The cheapest quote and the most expensive quote can promise the same outcome. What actually predicts a good result is process, ownership and communication—not the logo on the proposal.</p><h2>Ask about ownership before anything else</h2><p>Confirm in writing that you will own your domain, hosting account, source code, content and any third-party accounts opened on your behalf. A partner who resists handing over admin access is a partner you will struggle to leave later.</p><div class=\"fact-grid\"><p><strong>Good sign</strong><br>Access and exports handed over as standard practice</p><p><strong>Warning sign</strong><br>\"We'll manage that for you\" with no handover plan</p></div><h2>Compare process, not just price</h2><ul><li>How is scope defined, and what happens when it changes?</li><li>Who writes the content, and in what language?</li><li>How many working demos will you see before launch?</li><li>What is the plan for accessibility, performance and testing?</li><li>What happens after launch—is support scoped or open-ended?</li></ul><h2>Read the portfolio like a customer, not a spectator</h2><p>Open real examples on a phone, on a slow connection if possible. Look for genuine business detail: prices, hours, honest photography, working forms—not just a polished homepage screenshot.</p><h3>A short reference call is worth more than a long deck</h3><p>Ask a past client one direct question: would they hire this partner again, and why or why not. The answer usually tells you more than the pitch does.</p>","Buyer’s guide"),
+        ("gdpr-cookie-base-sito-piccola-impresa","GDPR, cookies and privacy basics every small-business website needs","A practical starting checklist for privacy-aware small-business websites in Italy—not a substitute for qualified legal advice.","<p class=\"lead\">Most small-business websites collect more personal data than their owners realise: contact forms, analytics, embedded maps, booking widgets. Getting the basics right is achievable without a legal department.</p><h2>Start with what you actually collect</h2><p>List every form, cookie, script and third-party embed on the site, and what personal data each one touches. You cannot write an honest privacy notice, or configure consent correctly, without this inventory.</p><div class=\"fact-grid\"><p><strong>Typical sources</strong><br>Contact forms, analytics, maps, booking widgets, chat tools</p><p><strong>First deliverable</strong><br>A plain-language data inventory</p></div><h2>Practical defaults we build in</h2><ul><li>No non-essential cookies fire before consent is given</li><li>A clear, specific privacy notice at the point of data collection</li><li>Data minimisation—collect only what the process actually needs</li><li>A defined retention period instead of storing enquiries indefinitely</li><li>HTTPS everywhere and secure handling of stored submissions</li></ul><h2>Where a developer's job ends</h2><p>We can implement consent management, minimise data collection and document what the site does with personal information. Whether that implementation satisfies your specific legal obligations is a question for a qualified privacy adviser, particularly if you handle sensitive data, operate across borders or work in a regulated sector.</p><h3>Treat this as a foundation, not a certificate</h3><p>A well-built site makes compliance achievable. It does not replace a proper legal review for a business with real regulatory exposure.</p>","Compliance basics"),
+        ("noleggiare-o-possedere-il-sito-web","Renting vs owning your website: platform builders compared with a custom build","A clear-eyed comparison of SaaS website builders and a custom build, based on what you actually control.","<p class=\"lead\">A page-builder subscription and a custom-built website can look similar on launch day. The difference shows up eighteen months later, when you need something the platform was never designed to do.</p><h2>What you are really choosing</h2><p>A SaaS builder rents you a platform: fast to start, predictable monthly cost, but your site lives inside someone else's system, with real limits on structure, integrations and data export.</p><p>A custom build costs more upfront and gives you a working product you fully own: your code, your data, your hosting choice, and no forced migration down the line.</p><div class=\"fact-grid\"><p><strong>Builders suit</strong><br>Simple, low-risk sites with standard needs</p><p><strong>Custom suits</strong><br>Sites tied closely to how the business actually operates</p></div><h2>Questions that reveal the right answer</h2><ul><li>Does the business depend on a specific booking, catalogue or workflow logic?</li><li>Will you need integrations the builder's app store does not offer?</li><li>Is switching platforms later an acceptable cost, or a real risk?</li><li>Does page speed and search visibility materially affect revenue?</li><li>Who needs to edit content day-to-day, and how technical are they?</li></ul><h2>A reasonable middle path</h2><p>Some businesses launch lean on a builder, prove demand, then commission a custom build once requirements are real rather than hypothetical. That sequencing is often smarter than guessing upfront.</p><h3>We are honest about the trade-off</h3><p>We build custom products because that is where we add the most value—not because a builder is always the wrong choice for a very simple site.</p>","Decision framework"),
+    ];
+    for (order, (slug, title, summary, body, eyebrow)) in insights.into_iter().enumerate() {
+        let item = ContentItem {
+            id: None,
+            kind: "insight".into(),
+            slug: slug.into(),
+            title: title.into(),
+            eyebrow: eyebrow.into(),
+            summary: summary.into(),
+            body: body.into(),
+            image: format!("/media/covers/insight/{slug}.svg"),
+            image_alt: format!("Editorial cover for {title}"),
+            seo_title: format!("{title} | Italy Developers"),
+            seo_description: summary.into(),
+            keywords: "piccole imprese Italia, guida sito web, privacy sito web, scegliere sviluppatore".into(),
+            cta: "Request a practical proposal".into(),
+            featured: false,
+            published: true,
+            order: 10 + order as i32,
+            created_at: now,
+            updated_at: now,
+        };
+        content(db).replace_one(doc! {"kind":"insight","slug":slug}, item).upsert(true).await?;
+    }
     Ok(())
 }
 
