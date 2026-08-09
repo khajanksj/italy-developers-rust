@@ -166,9 +166,13 @@
   $("[data-content-search]")?.addEventListener("input", applyFilters);
   $$("[data-kind]").forEach((button) =>
     button.addEventListener("click", () => {
-      currentKind = button.dataset.kind;
+      const alreadyActive = button.classList.contains("active");
+      currentKind =
+        button.dataset.kind !== "all" && alreadyActive
+          ? "all"
+          : button.dataset.kind;
       $$("[data-kind]").forEach((v) =>
-        v.classList.toggle("active", v === button),
+        v.classList.toggle("active", v.dataset.kind === currentKind),
       );
       applyFilters();
     }),
