@@ -35,7 +35,7 @@
     {% for item in testimonials %}
     <article class="testimonial-card">
       {% if !item.image.is_empty() %}<img class="testimonial-image" src="{{ item.image }}" alt="{{ item.image_alt }}" loading="lazy" width="1200" height="900">{% endif %}
-      <div class="testimonial-copy"><p class="kicker">{{ item.eyebrow }}</p><blockquote>{{ item.summary }}</blockquote><footer><strong>{{ item.title }}</strong>{% if !item.cta.is_empty() %}<small>{{ item.cta }}</small>{% endif %}</footer></div>
+      <div class="testimonial-copy"><p class="kicker">{{ item.eyebrow }}</p><blockquote>{{ item.summary }}</blockquote><footer><strong>{{ item.title }}</strong>{% if !item.cta.is_empty() %}{% if !item.link.is_empty() %}<a class="text-link" href="{{ item.link }}">{{ item.cta }} →</a>{% else %}<small>{{ item.cta }}</small>{% endif %}{% endif %}</footer></div>
     </article>
     {% endfor %}
   </div>
