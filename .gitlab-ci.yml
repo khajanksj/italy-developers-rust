@@ -1,0 +1,36 @@
+stages:
+  - build
+  - deploy
+
+build:
+  stage: build
+  tags:
+    - italydev
+  before_script:
+    - source "$HOME/.cargo/env"
+  script:
+    - cargo build --release --locked
+  cache:
+    key: cargo-$CI_COMMIT_REF_SLUG
+    paths:
+      - target/
+  artifacts:
+    paths:
+      - target/release/italy-developers-rust
+    expire_in: 1 hour
+
+deploy:
+  stage: deploy
+  tags:
+    - italydev
+  needs:
+    - build
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - install -m 755 target/release/italy-developers-rust /srv/italydev/italy-developers-rust.new
+    - mv /srv/italydev/italy-developers-rust.new /srv/italydev/italy-developers-rust
+    - rsync -a --delete --chmod=D2775,F664 static/ /srv/italydev/static/
+    - sudo /bin/systemctl restart italydev-web
+    - sleep 2
+    - curl -fsS http://127.0.0.1:8081/health/live
