@@ -1,6 +1,7 @@
 mod config;
 mod error;
 mod handlers;
+mod i18n;
 mod security;
 
 use std::io;

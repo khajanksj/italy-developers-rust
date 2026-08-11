@@ -13,7 +13,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use validator::Validate;
 
-use crate::{config::Config, error::AppError, security};
+use crate::{
+    config::Config,
+    error::AppError,
+    i18n::{self, Ui},
+    security,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContentItem {
@@ -23,6 +28,8 @@ pub struct ContentItem {
     pub kind: String,
     #[serde(default)]
     pub slug: String,
+    #[serde(default = "default_lang")]
+    pub lang: String,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -64,12 +71,16 @@ pub struct ContentItem {
 fn default_datetime() -> DateTime {
     DateTime::from_millis(0)
 }
+fn default_lang() -> String {
+    "en".into()
+}
 impl Default for ContentItem {
     fn default() -> Self {
         Self {
             id: None,
             kind: String::new(),
             slug: String::new(),
+            lang: default_lang(),
             title: String::new(),
             eyebrow: String::new(),
             summary: String::new(),
@@ -215,6 +226,10 @@ struct HomeTemplate {
     work: Vec<ContentItem>,
     insights: Vec<ContentItem>,
     testimonials: Vec<ContentItem>,
+    lang: String,
+    prefix: String,
+    path_no_prefix: String,
+    t: Ui,
 }
 #[derive(Template)]
 #[template(path = "collection.html")]
@@ -227,6 +242,10 @@ struct CollectionTemplate {
     intro: String,
     kind: String,
     items: Vec<ContentItem>,
+    lang: String,
+    prefix: String,
+    path_no_prefix: String,
+    t: Ui,
 }
 #[derive(Template)]
 #[template(path = "detail.html")]
@@ -239,6 +258,10 @@ struct DetailTemplate {
     post_likes: i64,
     authenticated: bool,
     viewer_name: String,
+    lang: String,
+    prefix: String,
+    path_no_prefix: String,
+    t: Ui,
 }
 
 #[derive(Template)]
@@ -248,12 +271,20 @@ struct MemberAuthTemplate {
     next: String,
     error: String,
     csrf: String,
+    lang: String,
+    prefix: String,
+    path_no_prefix: String,
+    t: Ui,
 }
 #[derive(Template)]
 #[template(path = "contact.html")]
 struct ContactTemplate {
     csrf: String,
     success: bool,
+    lang: String,
+    prefix: String,
+    path_no_prefix: String,
+    t: Ui,
 }
 #[derive(Template)]
 #[template(path = "admin/login.html")]
@@ -373,7 +404,7 @@ pub async fn user_command(db: &Database, args: &[String]) -> anyhow::Result<()> 
 }
 
 pub fn routes(cfg: &mut web::ServiceConfig) {
-    cfg.route("/", web::get().to(home))
+    cfg.route("/", web::get().to(root))
         .route("/services", web::get().to(services))
         .route("/services/{slug}", web::get().to(service_detail))
         .route("/work", web::get().to(work))
@@ -386,6 +417,23 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
         .route("/insights/{slug}", web::get().to(insight_detail))
         .route("/blog", web::get().to(blog))
         .route("/blog/{slug}", web::get().to(blog_detail))
+        .service(
+            web::scope("/{lang:it|de|fr|pt}")
+                .route("", web::get().to(home_localized))
+                .route("/", web::get().to(home_localized))
+                .route("/services", web::get().to(services_i18n))
+                .route("/services/{slug}", web::get().to(service_detail_i18n))
+                .route("/work", web::get().to(work_i18n))
+                .route("/work/{slug}", web::get().to(work_detail_i18n))
+                .route("/about", web::get().to(about_i18n))
+                .route("/about/{slug}", web::get().to(about_detail_i18n))
+                .route("/tech-stack", web::get().to(tech_stack_i18n))
+                .route("/tech-stack/{slug}", web::get().to(tech_detail_i18n))
+                .route("/insights", web::get().to(insights_i18n))
+                .route("/insights/{slug}", web::get().to(insight_detail_i18n))
+                .route("/blog", web::get().to(blog_i18n))
+                .route("/blog/{slug}", web::get().to(blog_detail_i18n)),
+        )
         .route("/blog/{slug}/comment", web::post().to(add_blog_comment))
         .route("/blog/{slug}/like", web::post().to(toggle_blog_like))
         .route("/blog/{slug}/comments/{id}/like", web::post().to(toggle_comment_like))
@@ -428,6 +476,18 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
     let migrations = db.collection::<mongodb::bson::Document>("content_migrations");
     blog_comments(db).create_index(IndexModel::builder().keys(doc! {"post_slug":1,"created_at":1}).build()).await?;
     blog_reactions(db).create_index(IndexModel::builder().keys(doc! {"target":1,"visitor":1}).options(IndexOptions::builder().unique(true).build()).build()).await?;
+    // Documents created before multi-language support have no `lang` field at all —
+    // Mongo query filters like `lang:{"$in":["en"]}` do NOT match a missing field
+    // (serde's `#[serde(default)]` only helps when *reading* a matched document), so
+    // without this backfill every pre-existing item would silently vanish from every
+    // listing. Idempotent: matches nothing once applied.
+    content(db)
+        .update_many(doc! {"lang": {"$exists": false}}, doc! {"$set": {"lang": "en"}})
+        .await?;
+    if migrations.find_one(doc! {"key":"translations-services-v1"}).await?.is_none() {
+        apply_translations_services_v1(db).await?;
+        migrations.insert_one(doc! {"key":"translations-services-v1","applied_at":DateTime::now()}).await?;
+    }
     if migrations.find_one(doc! {"key":"testimonial-links-v14"}).await?.is_some() {
         return Ok(());
     }
@@ -498,6 +558,7 @@ async fn ensure_seed(db: &Database) -> Result<(), AppError> {
                 id: None,
                 kind: kind.into(),
                 slug: slug.into(),
+                lang: "en".into(),
                 title: title.into(),
                 eyebrow: eyebrow.into(),
                 summary: summary.into(),
@@ -637,6 +698,7 @@ async fn apply_image_consistency_and_insights_v12(db: &Database, now: DateTime) 
             id: None,
             kind: "insight".into(),
             slug: slug.into(),
+            lang: "en".into(),
             title: title.into(),
             eyebrow: eyebrow.into(),
             summary: summary.into(),
@@ -757,8 +819,8 @@ async fn apply_editorial_v3(db: &Database, now: DateTime) -> Result<(), AppError
         ("blog","small-business-website-scope","How to scope a useful small-business website","A practical way to choose pages, proof and workflows without promising features the team cannot maintain.","<p class=\"lead\">Begin with the customer decision and the action the business can reliably fulfil.</p><h2>Map the essential questions</h2><p>Who is the service for? What problem does it solve? Where is it available? What evidence builds trust? What happens after contact?</p><h2>Prioritise the working core</h2><p>Launch the strongest service pages, real work, about information and a dependable enquiry path before advanced personalization or automation.</p><h2>Keep ownership clear</h2><p>The business should control its domain, content, accounts and data. Document ongoing costs and choose technology the team can support.</p>","Project planning","/static/images/lean-ecommerce.png")
     ];
     for (order, (kind, slug, title, summary, body, eyebrow, _image)) in entries.into_iter().enumerate() {
-        let item = ContentItem { id:None, kind:kind.into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:body.into(), image:format!("/media/covers/{kind}/{slug}.svg"), image_alt:format!("Editorial illustration for {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"Rust, Python, Django, APIs, CMS, Docker, web development".into(), cta:"Discuss a practical project".into(), link:String::new(), featured:kind == "service" || kind == "work" || (kind == "blog" && order < 18), published:true, order:order as i32, created_at:now, updated_at:now };
-        content(db).replace_one(doc! {"kind":kind,"slug":slug}, item).upsert(true).await?;
+        let item = ContentItem { id:None, kind:kind.into(), slug:slug.into(), lang:"en".into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:body.into(), image:format!("/media/covers/{kind}/{slug}.svg"), image_alt:format!("Editorial illustration for {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"Rust, Python, Django, APIs, CMS, Docker, web development".into(), cta:"Discuss a practical project".into(), link:String::new(), featured:kind == "service" || kind == "work" || (kind == "blog" && order < 18), published:true, order:order as i32, created_at:now, updated_at:now };
+        content(db).replace_one(doc! {"kind":kind,"slug":slug,"lang":"en"}, item).upsert(true).await?;
     }
     let seeded: Vec<ContentItem> = content(db).find(doc! {"published":true}).await?.try_collect().await?;
     for item in seeded {
@@ -792,10 +854,100 @@ async fn apply_service_v8(db: &Database, now: DateTime) -> Result<(), AppError> 
         ("modernisation-rescue-support","Product modernisation, rescue and ongoing support","Take over an unfinished, fragile or outdated application, understand what is valuable and move it toward a maintainable release.","<p class=\"lead\">You may already have code, data and users—but no reliable path forward. We can audit the product and improve it without automatically recommending a full rewrite.</p><h2>When this service helps</h2><ul><li>A previous developer or agency is no longer available</li><li>Deployment is unreliable or undocumented</li><li>The interface is difficult on mobile</li><li>Security, permissions or backups are unclear</li><li>New features are slow because the structure is fragile</li><li>A prototype needs production foundations</li></ul><h2>Our first deliverable</h2><p>A technical and product assessment: what works, what is risky, what should be preserved and a phased recovery plan. Critical access, secrets and backups are addressed before cosmetic changes.</p><h2>Possible next phases</h2><p>Bug fixing, UI modernisation, API cleanup, database migration, containerisation, tests, performance work, security hardening, documentation and a controlled production release.</p><h3>No forced rewrite</h3><p>We recommend replacement only when evidence shows that repair would cost more or leave unacceptable risk.</p>","Audit · repair · evolve","/media/covers/service/modernisation-rescue-support.svg")
     ];
     for (order, (slug, title, summary, body, eyebrow, image)) in services.into_iter().enumerate() {
-        let item = ContentItem { id:None, kind:"service".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:body.into(), image:image.into(), image_alt:format!("Italy Developers service: {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"custom software Italy, application development, AI integration, websites, APIs".into(), cta:"Tell us what you want to build".into(), link:String::new(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
-        content(db).replace_one(doc! {"kind":"service","slug":slug}, item).upsert(true).await?;
+        let item = ContentItem { id:None, kind:"service".into(), slug:slug.into(), lang:"en".into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:body.into(), image:image.into(), image_alt:format!("Italy Developers service: {title}"), seo_title:format!("{title} | Italy Developers"), seo_description:summary.into(), keywords:"custom software Italy, application development, AI integration, websites, APIs".into(), cta:"Tell us what you want to build".into(), link:String::new(), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
+        content(db).replace_one(doc! {"kind":"service","slug":slug,"lang":"en"}, item).upsert(true).await?;
     }
     Ok(())
+}
+
+struct Translated {
+    slug: &'static str,
+    lang: &'static str,
+    title: &'static str,
+    eyebrow: &'static str,
+    summary: &'static str,
+    glance: &'static str,
+    body: &'static str,
+    seo_title: &'static str,
+    seo_description: &'static str,
+    cta: &'static str,
+}
+/// Inserts translated documents alongside the existing English ones for a
+/// `kind`, reusing the English doc's image/order/link/featured. Safe to call
+/// repeatedly (upserts on kind+slug+lang).
+async fn apply_translations(db: &Database, kind: &str, rows: &[Translated]) -> Result<(), AppError> {
+    let english: Vec<ContentItem> = content(db)
+        .find(doc! {"kind": kind, "lang": "en"})
+        .await?
+        .try_collect()
+        .await?;
+    let now = DateTime::now();
+    for row in rows {
+        let Some(src) = english.iter().find(|e| e.slug == row.slug) else { continue };
+        let item = ContentItem {
+            id: None,
+            kind: kind.into(),
+            slug: row.slug.into(),
+            lang: row.lang.into(),
+            title: row.title.into(),
+            eyebrow: row.eyebrow.into(),
+            summary: row.summary.into(),
+            glance: row.glance.into(),
+            body: row.body.into(),
+            image: src.image.clone(),
+            image_alt: row.title.into(),
+            seo_title: row.seo_title.into(),
+            seo_description: row.seo_description.into(),
+            keywords: src.keywords.clone(),
+            cta: row.cta.into(),
+            link: src.link.clone(),
+            featured: src.featured,
+            published: true,
+            order: src.order,
+            created_at: now,
+            updated_at: now,
+        };
+        content(db)
+            .replace_one(doc! {"kind": kind, "slug": row.slug, "lang": row.lang}, item)
+            .upsert(true)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn apply_translations_services_v1(db: &Database) -> Result<(), AppError> {
+    let rows: Vec<Translated> = vec![
+        Translated{slug:"websites-ecommerce-booking",lang:"it",title:"Siti web, e-commerce e piattaforme di prenotazione",eyebrow:"Vendi · prenota · cresci",summary:"Lancia un sito web credibile, vendi prodotti, accetta prenotazioni e gestisci i contenuti senza dipendere da uno sviluppatore per ogni modifica.",glance:"Dal calendario prenotazioni di uno studio medico al checkout di un produttore: guarda DoAppointment e JGOB nel nostro portfolio.",body:"<p class=\"lead\">Per un'azienda, un professionista o un creator italiano che ha bisogno di più di un template: progettiamo il percorso del cliente, costruiamo il prodotto e rendiamo semplice la gestione quotidiana.</p><h2>Cosa puoi chiederci di costruire</h2><ul><li>Siti web aziendali e professionali</li><li>Negozi online, cataloghi, carrelli e checkout</li><li>Sistemi di appuntamenti, prenotazioni e disponibilità</li><li>Piattaforme di membership, directory e community</li><li>Contenuti multilingua e percorsi per la ricerca locale</li><li>Dashboard sicura per pagine, ordini e richieste</li></ul><h2>Esempi reali</h2><p>Uno studio medico può gestire professionisti e slot di appuntamento. Un produttore locale può vendere online e tracciare gli ordini. Un ristorante può pubblicare i menu e ricevere prenotazioni dirette. Un consulente può qualificare i contatti prima di una chiamata.</p><h2>Di cosa ci occupiamo</h2><p>Pianificazione del prodotto, design dell'interfaccia, backend, database, integrazioni di pagamento o prenotazione, strumenti di amministrazione, test, sicurezza, deployment e passaggio di consegne. La prima release si concentra sul percorso più breve e utile dal visitatore al cliente.</p><h3>Prova nel nostro portfolio</h3><p>DoAppointment, il commerce di JGOB e questo CMS di Italy Developers dimostrano capacità di pianificazione, catalogo, checkout, contenuti e amministrazione.</p>",seo_title:"Siti web, e-commerce e piattaforme di prenotazione | Italy Developers",seo_description:"Lancia un sito web credibile, vendi prodotti, accetta prenotazioni e gestisci i contenuti senza dipendere da uno sviluppatore per ogni modifica.",cta:"Dicci cosa vuoi costruire"},
+        Translated{slug:"websites-ecommerce-booking",lang:"de",title:"Websites, E-Commerce und Buchungsplattformen",eyebrow:"Verkaufen · buchen · wachsen",summary:"Starten Sie eine glaubwürdige Website, verkaufen Sie Produkte, nehmen Sie Buchungen an und verwalten Sie Inhalte, ohne für jede Änderung einen Entwickler zu brauchen.",glance:"Von der Terminkalender einer Praxis bis zum Checkout eines Herstellers: siehe DoAppointment und JGOB in unserem Portfolio.",body:"<p class=\"lead\">Für ein italienisches Unternehmen, einen Fachmann oder Creator, der mehr als eine Vorlage braucht: Wir gestalten die Customer Journey, bauen das Produkt und machen die tägliche Verwaltung einfach.</p><h2>Was Sie uns bauen lassen können</h2><ul><li>Geschäfts- und Fachwebsites</li><li>Onlineshops, Kataloge, Warenkörbe und Checkout</li><li>Termin-, Reservierungs- und Verfügbarkeitssysteme</li><li>Mitgliedschafts-, Verzeichnis- und Community-Plattformen</li><li>Mehrsprachige Inhalte und lokale Suchpfade</li><li>Sicheres Inhaber-Dashboard für Seiten, Bestellungen und Anfragen</li></ul><h2>Praxisbeispiele</h2><p>Eine Praxis kann Fachkräfte und Terminslots verwalten. Ein lokaler Hersteller kann online verkaufen und Bestellungen verfolgen. Ein Restaurant kann Speisekarten veröffentlichen und direkte Reservierungen erhalten. Ein Berater kann Leads vor einem Anruf qualifizieren.</p><h2>Was wir übernehmen</h2><p>Produktplanung, Interface-Design, Backend, Datenbank, Zahlungs- oder Buchungsintegrationen, Admin-Tools, Tests, Sicherheit, Deployment und Übergabe. Die erste Version konzentriert sich auf den kürzesten nützlichen Weg vom Besucher zum Kunden.</p><h3>Beleg in unserem Portfolio</h3><p>DoAppointment, der JGOB-Commerce und dieses Italy-Developers-CMS zeigen Fähigkeiten in Terminplanung, Katalog, Checkout, Inhalten und Administration.</p>",seo_title:"Websites, E-Commerce und Buchungsplattformen | Italy Developers",seo_description:"Starten Sie eine glaubwürdige Website, verkaufen Sie Produkte, nehmen Sie Buchungen an und verwalten Sie Inhalte, ohne für jede Änderung einen Entwickler zu brauchen.",cta:"Sagen Sie uns, was Sie bauen möchten"},
+        Translated{slug:"websites-ecommerce-booking",lang:"fr",title:"Sites web, e-commerce et plateformes de réservation",eyebrow:"Vendre · réserver · grandir",summary:"Lancez un site web crédible, vendez des produits, acceptez des réservations et gérez le contenu sans dépendre d'un développeur pour chaque mise à jour.",glance:"Du calendrier de réservation d'un cabinet au paiement d'un producteur : voyez DoAppointment et JGOB dans notre portfolio.",body:"<p class=\"lead\">Pour une entreprise, un professionnel ou un créateur italien qui a besoin de plus qu'un modèle : nous concevons le parcours client, construisons le produit et simplifions la gestion quotidienne.</p><h2>Ce que vous pouvez nous demander de construire</h2><ul><li>Sites web professionnels et d'entreprise</li><li>Boutiques en ligne, catalogues, paniers et paiement</li><li>Systèmes de rendez-vous, réservation et disponibilité</li><li>Plateformes d'adhésion, d'annuaire et de communauté</li><li>Contenu multilingue et parcours de recherche locale</li><li>Tableau de bord sécurisé pour les pages, commandes et demandes</li></ul><h2>Exemples concrets</h2><p>Un cabinet peut gérer ses praticiens et créneaux de rendez-vous. Un producteur local peut vendre en ligne et suivre les commandes. Un restaurant peut publier ses menus et recevoir des réservations directes. Un consultant peut qualifier ses prospects avant un appel.</p><h2>Ce que nous prenons en charge</h2><p>Planification produit, design d'interface, backend, base de données, intégrations de paiement ou de réservation, outils d'administration, tests, sécurité, déploiement et transfert. La première version se concentre sur le chemin le plus court et utile du visiteur au client.</p><h3>Preuve dans notre portfolio</h3><p>DoAppointment, le commerce JGOB et ce CMS Italy Developers démontrent des capacités de planification, catalogue, paiement, contenu et administration.</p>",seo_title:"Sites web, e-commerce et plateformes de réservation | Italy Developers",seo_description:"Lancez un site web crédible, vendez des produits, acceptez des réservations et gérez le contenu sans dépendre d'un développeur pour chaque mise à jour.",cta:"Dites-nous ce que vous voulez construire"},
+        Translated{slug:"websites-ecommerce-booking",lang:"pt",title:"Sites, e-commerce e plataformas de reservas",eyebrow:"Vender · reservar · crescer",summary:"Lance um site confiável, venda produtos, aceite reservas e gerencie conteúdo sem depender de um desenvolvedor a cada atualização.",glance:"Do calendário de reservas de uma clínica ao checkout de um produtor: veja DoAppointment e JGOB no nosso portfólio.",body:"<p class=\"lead\">Para uma empresa, profissional ou criador italiano que precisa de mais do que um template: projetamos a jornada do cliente, construímos o produto e tornamos a gestão diária simples.</p><h2>O que você pode nos pedir para construir</h2><ul><li>Sites empresariais e profissionais</li><li>Lojas online, catálogos, carrinhos e checkout</li><li>Sistemas de agendamento, reserva e disponibilidade</li><li>Plataformas de associação, diretório e comunidade</li><li>Conteúdo multilíngue e jornadas de busca local</li><li>Painel seguro do proprietário para páginas, pedidos e solicitações</li></ul><h2>Exemplos reais</h2><p>Uma clínica pode gerenciar profissionais e horários de consulta. Um produtor local pode vender online e rastrear pedidos. Um restaurante pode publicar cardápios e receber reservas diretas. Um consultor pode qualificar leads antes de uma ligação.</p><h2>O que cuidamos</h2><p>Planejamento de produto, design de interface, backend, banco de dados, integrações de pagamento ou reserva, ferramentas administrativas, testes, segurança, implantação e entrega. O primeiro lançamento foca no caminho mais curto e útil do visitante ao cliente.</p><h3>Prova no nosso portfólio</h3><p>DoAppointment, o comércio da JGOB e este CMS da Italy Developers demonstram capacidade de agendamento, catálogo, checkout, conteúdo e administração.</p>",seo_title:"Sites, e-commerce e plataformas de reservas | Italy Developers",seo_description:"Lance um site confiável, venda produtos, aceite reservas e gerencie conteúdo sem depender de um desenvolvedor a cada atualização.",cta:"Diga-nos o que você quer construir"},
+
+        Translated{slug:"custom-business-software",lang:"it",title:"Software aziendale su misura e sistemi interni",eyebrow:"Operare · organizzare · controllare",summary:"Sostituisci fogli di calcolo, strumenti scollegati e amministrazione ripetitiva con un unico sistema progettato attorno al modo in cui la tua organizzazione lavora davvero.",glance:"La stessa disciplina dietro il sistema di inventario di StoreMate e la piattaforma di parcheggi, applicata alla tua attività.",body:"<p class=\"lead\">Quando un software preconfezionato costringe il tuo team nel flusso di lavoro sbagliato, possiamo costruire il sistema mirato di cui hai davvero bisogno.</p><h2>Sistemi che possiamo realizzare</h2><ul><li>Piattaforme CRM e di gestione clienti</li><li>Operazioni di inventario, fornitori e magazzino</li><li>Sistemi di formazione e gestione dell'apprendimento</li><li>Dashboard per il personale, approvazioni e reportistica</li><li>Gestione di parcheggi, proprietà, risorse e prenotazioni</li><li>Portali sicuri per clienti, partner o membri</li></ul><h2>Come inizia un progetto</h2><p>Mappiamo utenti, record, decisioni, eccezioni e permessi. Poi costruiamo la versione operativa più piccola, la testiamo con le persone che fanno il lavoro e la espandiamo solo dove fa risparmiare tempo o migliora il controllo.</p><h2>Cosa è incluso</h2><p>Accesso basato sui ruoli, record ricercabili, moduli validati, cambi di stato tracciabili, notifiche, esportazioni, dashboard responsive, connessioni API e deployment documentato.</p><h3>Prova nel nostro portfolio</h3><p>StoreMate, LMS, CoinProfit Plus e il sistema di parcheggi mostrano esperienza con record complessi, ruoli, dashboard e flussi operativi.</p>",seo_title:"Software aziendale su misura e sistemi interni | Italy Developers",seo_description:"Sostituisci fogli di calcolo, strumenti scollegati e amministrazione ripetitiva con un unico sistema progettato attorno al modo in cui la tua organizzazione lavora davvero.",cta:"Dicci cosa vuoi costruire"},
+        Translated{slug:"custom-business-software",lang:"de",title:"Individuelle Unternehmenssoftware und interne Systeme",eyebrow:"Betreiben · organisieren · kontrollieren",summary:"Ersetzen Sie Tabellenkalkulationen, unverbundene Tools und wiederkehrende Verwaltungsarbeit durch ein System, das um Ihre tatsächliche Arbeitsweise herum gebaut ist.",glance:"Die gleiche Disziplin hinter StoreMates Bestandssystem und der Parkplatzplattform, angewendet auf Ihren Betrieb.",body:"<p class=\"lead\">Wenn Standardsoftware Ihr Team in den falschen Workflow zwingt, bauen wir das fokussierte System, das Sie wirklich brauchen.</p><h2>Systeme, die wir liefern können</h2><ul><li>CRM- und Kundenmanagement-Plattformen</li><li>Bestands-, Lieferanten- und Lageroperationen</li><li>Lernmanagement- und Schulungssysteme</li><li>Mitarbeiter-Dashboards, Genehmigungen und Berichte</li><li>Verwaltung von Parkplätzen, Immobilien, Ressourcen und Buchungen</li><li>Sichere Portale für Kunden, Partner oder Mitglieder</li></ul><h2>Wie ein Projekt beginnt</h2><p>Wir kartieren Nutzer, Datensätze, Entscheidungen, Ausnahmen und Berechtigungen. Dann bauen wir die kleinste funktionsfähige Version, testen sie mit den Menschen, die die Arbeit tatsächlich machen, und erweitern sie nur dort, wo sie Zeit spart oder die Kontrolle verbessert.</p><h2>Was enthalten ist</h2><p>Rollenbasierter Zugriff, durchsuchbare Datensätze, validierte Formulare, nachvollziehbare Statusänderungen, Benachrichtigungen, Exporte, responsive Dashboards, API-Anbindungen und dokumentiertes Deployment.</p><h3>Beleg in unserem Portfolio</h3><p>StoreMate, LMS, CoinProfit Plus und das Parkplatzsystem zeigen Erfahrung mit komplexen Datensätzen, Rollen, Dashboards und operativen Abläufen.</p>",seo_title:"Individuelle Unternehmenssoftware und interne Systeme | Italy Developers",seo_description:"Ersetzen Sie Tabellenkalkulationen, unverbundene Tools und wiederkehrende Verwaltungsarbeit durch ein System, das um Ihre tatsächliche Arbeitsweise herum gebaut ist.",cta:"Sagen Sie uns, was Sie bauen möchten"},
+        Translated{slug:"custom-business-software",lang:"fr",title:"Logiciels métier sur mesure et systèmes internes",eyebrow:"Exploiter · organiser · contrôler",summary:"Remplacez les tableurs, les outils déconnectés et l'administration répétitive par un seul système conçu autour de la façon dont votre organisation fonctionne réellement.",glance:"La même rigueur derrière le système d'inventaire de StoreMate et la plateforme de parking, appliquée à votre activité.",body:"<p class=\"lead\">Lorsqu'un logiciel standard force votre équipe dans le mauvais flux de travail, nous pouvons construire le système ciblé dont vous avez vraiment besoin.</p><h2>Systèmes que nous pouvons livrer</h2><ul><li>Plateformes CRM et de gestion clients</li><li>Opérations d'inventaire, fournisseurs et stock</li><li>Systèmes de formation et de gestion de l'apprentissage</li><li>Tableaux de bord du personnel, approbations et rapports</li><li>Gestion de parkings, propriétés, ressources et réservations</li><li>Portails sécurisés pour clients, partenaires ou membres</li></ul><h2>Comment un projet démarre</h2><p>Nous cartographions les utilisateurs, les enregistrements, les décisions, les exceptions et les permissions. Nous construisons ensuite la plus petite version opérationnelle, la testons avec les personnes qui font le travail et ne l'étendons que là où elle fait gagner du temps ou améliore le contrôle.</p><h2>Ce qui est inclus</h2><p>Accès basé sur les rôles, enregistrements consultables, formulaires validés, changements de statut traçables, notifications, exports, tableaux de bord responsives, connexions API et déploiement documenté.</p><h3>Preuve dans notre portfolio</h3><p>StoreMate, LMS, CoinProfit Plus et le système de parking montrent une expérience avec des enregistrements complexes, des rôles, des tableaux de bord et des flux opérationnels.</p>",seo_title:"Logiciels métier sur mesure et systèmes internes | Italy Developers",seo_description:"Remplacez les tableurs, les outils déconnectés et l'administration répétitive par un seul système conçu autour de la façon dont votre organisation fonctionne réellement.",cta:"Dites-nous ce que vous voulez construire"},
+        Translated{slug:"custom-business-software",lang:"pt",title:"Software empresarial sob medida e sistemas internos",eyebrow:"Operar · organizar · controlar",summary:"Substitua planilhas, ferramentas desconectadas e administração repetitiva por um único sistema projetado em torno de como sua organização realmente funciona.",glance:"A mesma disciplina por trás do sistema de estoque da StoreMate e da plataforma de estacionamento, aplicada à sua operação.",body:"<p class=\"lead\">Quando um software pronto força sua equipe a um fluxo de trabalho errado, podemos construir o sistema focado de que você realmente precisa.</p><h2>Sistemas que podemos entregar</h2><ul><li>Plataformas de CRM e gestão de clientes</li><li>Operações de estoque, fornecedores e inventário</li><li>Sistemas de gestão de aprendizagem e treinamento</li><li>Painéis para equipe, aprovações e relatórios</li><li>Gestão de estacionamento, propriedades, recursos e reservas</li><li>Portais seguros para clientes, parceiros ou membros</li></ul><h2>Como um projeto começa</h2><p>Mapeamos usuários, registros, decisões, exceções e permissões. Depois construímos a menor versão operacional, testamos com as pessoas que fazem o trabalho e expandimos apenas onde economiza tempo ou melhora o controle.</p><h2>O que está incluído</h2><p>Acesso baseado em funções, registros pesquisáveis, formulários validados, mudanças de status rastreáveis, notificações, exportações, painéis responsivos, conexões de API e implantação documentada.</p><h3>Prova no nosso portfólio</h3><p>StoreMate, LMS, CoinProfit Plus e o sistema de estacionamento mostram experiência com registros complexos, funções, painéis e fluxos operacionais.</p>",seo_title:"Software empresarial sob medida e sistemas internos | Italy Developers",seo_description:"Substitua planilhas, ferramentas desconectadas e administração repetitiva por um único sistema projetado em torno de como sua organização realmente funciona.",cta:"Diga-nos o que você quer construir"},
+
+        Translated{slug:"apps-digital-products",lang:"it",title:"Applicazioni mobili, desktop e multipiattaforma",eyebrow:"Immaginare · costruire · lanciare",summary:"Trasforma un'idea di prodotto in un'applicazione utilizzabile per clienti, personale o una community mirata—dal prototipo al rilascio in produzione.",glance:"Dall'app musicale alla piattaforma di gioco nel nostro portfolio: un solo processo per trasformare un'idea in un prodotto rilasciato.",body:"<p class=\"lead\">Aiutiamo a definire l'idea, scegliere la piattaforma giusta e costruire un prodotto che le persone possano capire senza formazione tecnica.</p><h2>Prodotti che possiamo creare</h2><ul><li>Applicazioni consumer e per community</li><li>Esperienze musicali, multimediali e di contenuto</li><li>Prodotti di gioco e interattivi</li><li>Strumenti desktop amministrativi e operativi</li><li>Portali self-service per i clienti</li><li>Interfacce multipiattaforma connesse via API</li></ul><h2>Web, mobile o desktop?</h2><p>Scegliamo in base a utenti, esigenze offline, distribuzione, funzionalità del dispositivo e budget. Una web app responsive è spesso la prima release più rapida; Flet o un altro approccio multipiattaforma può servire interfacce desktop e app-like dove è adatto.</p><h2>Dall'idea al rilascio</h2><p>Definizione del prodotto, flussi utente, design system, codice applicativo, API backend, autenticazione, dati, test, preparazione al rilascio e miglioramento continuo possono essere gestiti come un'unica consegna.</p><h3>Prova nel nostro portfolio</h3><p>L'applicazione musicale, il lavoro di gaming, l'admin Flet e diversi prodotti dashboard dimostrano capacità di interfaccia consumer e operativa.</p>",seo_title:"Applicazioni mobili, desktop e multipiattaforma | Italy Developers",seo_description:"Trasforma un'idea di prodotto in un'applicazione utilizzabile per clienti, personale o una community mirata—dal prototipo al rilascio in produzione.",cta:"Dicci cosa vuoi costruire"},
+        Translated{slug:"apps-digital-products",lang:"de",title:"Mobile, Desktop- und plattformübergreifende Anwendungen",eyebrow:"Erdenken · bauen · starten",summary:"Verwandeln Sie eine Produktidee in eine nutzbare Anwendung für Kunden, Mitarbeiter oder eine fokussierte Community—vom Prototyp zur Produktionsversion.",glance:"Von der Musik-App bis zur Gaming-Plattform in unserem Portfolio: ein Prozess, um eine Idee in ein veröffentlichtes Produkt zu verwandeln.",body:"<p class=\"lead\">Wir helfen, die Idee zu formen, die richtige Plattform zu wählen und ein Produkt zu bauen, das Menschen ohne technische Schulung verstehen können.</p><h2>Produkte, die wir erstellen können</h2><ul><li>Verbraucher- und Community-Anwendungen</li><li>Musik-, Medien- und Content-Erlebnisse</li><li>Gaming- und interaktive Produkte</li><li>Admin- und operative Desktop-Tools</li><li>Kunden-Self-Service-Portale</li><li>API-verbundene plattformübergreifende Interfaces</li></ul><h2>Web, mobil oder Desktop?</h2><p>Wir wählen basierend auf Nutzern, Offline-Bedarf, Distribution, Gerätefunktionen und Budget. Eine responsive Web-App ist oft die schnellste erste Version; Flet oder ein anderer plattformübergreifender Ansatz kann Desktop- und app-ähnliche Interfaces bedienen, wo es passt.</p><h2>Von der Idee zur Veröffentlichung</h2><p>Produktdefinition, Nutzerflüsse, Design-System, Anwendungscode, Backend-APIs, Authentifizierung, Daten, Tests, Release-Vorbereitung und laufende Verbesserung können als eine Lieferung behandelt werden.</p><h3>Beleg in unserem Portfolio</h3><p>Die Musikanwendung, Gaming-Arbeit, Flet-Admin und mehrere Dashboard-Produkte zeigen Fähigkeiten bei Verbraucher- und operativen Interfaces.</p>",seo_title:"Mobile, Desktop- und plattformübergreifende Anwendungen | Italy Developers",seo_description:"Verwandeln Sie eine Produktidee in eine nutzbare Anwendung für Kunden, Mitarbeiter oder eine fokussierte Community—vom Prototyp zur Produktionsversion.",cta:"Sagen Sie uns, was Sie bauen möchten"},
+        Translated{slug:"apps-digital-products",lang:"fr",title:"Applications mobiles, de bureau et multiplateformes",eyebrow:"Imaginer · construire · lancer",summary:"Transformez une idée de produit en une application utilisable pour les clients, le personnel ou une communauté ciblée—du prototype à la version de production.",glance:"De l'application musicale à la plateforme de jeu dans notre portfolio : un seul processus pour transformer une idée en produit lancé.",body:"<p class=\"lead\">Nous aidons à façonner l'idée, choisir la bonne plateforme et construire un produit que les gens peuvent comprendre sans formation technique.</p><h2>Produits que nous pouvons créer</h2><ul><li>Applications grand public et communautaires</li><li>Expériences musicales, médias et de contenu</li><li>Produits de jeu et interactifs</li><li>Outils de bureau d'administration et opérationnels</li><li>Portails libre-service pour les clients</li><li>Interfaces multiplateformes connectées par API</li></ul><h2>Web, mobile ou bureau ?</h2><p>Nous choisissons en fonction des utilisateurs, des besoins hors ligne, de la distribution, des fonctionnalités de l'appareil et du budget. Une application web responsive est souvent la première version la plus rapide ; Flet ou une autre approche multiplateforme peut servir des interfaces de bureau et de type application là où cela convient.</p><h2>De l'idée à la sortie</h2><p>Définition du produit, parcours utilisateurs, système de design, code applicatif, API backend, authentification, données, tests, préparation de la sortie et amélioration continue peuvent être traités comme une seule livraison.</p><h3>Preuve dans notre portfolio</h3><p>L'application musicale, le travail de jeu, l'admin Flet et plusieurs produits de tableau de bord démontrent une capacité d'interface grand public et opérationnelle.</p>",seo_title:"Applications mobiles, de bureau et multiplateformes | Italy Developers",seo_description:"Transformez une idée de produit en une application utilisable pour les clients, le personnel ou une communauté ciblée—du prototype à la version de production.",cta:"Dites-nous ce que vous voulez construire"},
+        Translated{slug:"apps-digital-products",lang:"pt",title:"Aplicativos móveis, desktop e multiplataforma",eyebrow:"Imaginar · construir · lançar",summary:"Transforme uma ideia de produto em um aplicativo utilizável para clientes, equipe ou uma comunidade focada—do protótipo ao lançamento em produção.",glance:"Do aplicativo de música à plataforma de jogos no nosso portfólio: um processo para transformar uma ideia em produto lançado.",body:"<p class=\"lead\">Ajudamos a moldar a ideia, escolher a plataforma certa e construir um produto que as pessoas entendam sem treinamento técnico.</p><h2>Produtos que podemos criar</h2><ul><li>Aplicativos para consumidores e comunidades</li><li>Experiências de música, mídia e conteúdo</li><li>Produtos de jogos e interativos</li><li>Ferramentas desktop administrativas e operacionais</li><li>Portais de autoatendimento para clientes</li><li>Interfaces multiplataforma conectadas via API</li></ul><h2>Web, mobile ou desktop?</h2><p>Escolhemos com base nos usuários, necessidades offline, distribuição, recursos do dispositivo e orçamento. Um aplicativo web responsivo costuma ser o primeiro lançamento mais rápido; Flet ou outra abordagem multiplataforma pode servir interfaces desktop e do tipo app onde for adequado.</p><h2>Da ideia ao lançamento</h2><p>Definição de produto, fluxos de usuário, sistema de design, código do aplicativo, APIs de backend, autenticação, dados, testes, preparação de lançamento e melhoria contínua podem ser tratados como uma única entrega.</p><h3>Prova no nosso portfólio</h3><p>O aplicativo de música, o trabalho de jogos, o admin em Flet e vários produtos de painel demonstram capacidade de interface para consumidores e operacional.</p>",seo_title:"Aplicativos móveis, desktop e multiplataforma | Italy Developers",seo_description:"Transforme uma ideia de produto em um aplicativo utilizável para clientes, equipe ou uma comunidade focada—do protótipo ao lançamento em produção.",cta:"Diga-nos o que você quer construir"},
+
+        Translated{slug:"ai-chat-automation",lang:"it",title:"Supporto e soluzioni aziendali basate su AI",eyebrow:"Assistere · automatizzare · migliorare",summary:"Supporto AI, ricerca della conoscenza e automazione dei flussi di lavoro con modelli self-hosted o gestiti, passaggio a un operatore umano e controlli misurabili.",glance:"Costruito con le stesse misure di passaggio a un operatore umano e incertezza visibile progettate per la piattaforma Pet Care AI.",body:"<p class=\"lead\">Trasformiamo l'AI in uno strumento aziendale con confini chiari: supporto clienti, ricerca della conoscenza interna, flussi documentali e assistenza al prodotto.</p><h2>Cosa possiamo consegnare</h2><ul><li>Supporto abilitato dall'AI con passaggio a un operatore umano e cronologia delle conversazioni</li><li>Assistenti di conoscenza RAG basati su contenuti aziendali approvati</li><li>AI open-source self-hosted quando privacy, controllo o utilizzo prevedibile lo giustificano</li><li>Integrazioni con modelli gestiti quando velocità e capacità sono il compromesso migliore</li><li>Classificazione, riepiloghi, raccomandazioni e automazione dei flussi di lavoro</li></ul><h2>Misure di sicurezza in produzione</h2><p>Permessi, confini dei dati, valutazione, controllo dei costi, osservabilità, feedback ed escalation sono progettati insieme alla funzionalità, non aggiunti dopo il lancio.</p><h2>Inizia con un pilota mirato</h2><p>Selezioniamo un flusso di lavoro ad alto valore, definiamo cosa significa successo e rilasciamo una prima versione verificabile prima di espandere.</p>",seo_title:"Funzionalità AI, chat e automazione intelligente | Italy Developers",seo_description:"Aggiungi un'AI utile a un prodotto esistente o costruisci un nuovo flusso di lavoro assistito dall'AI con controllo umano chiaro, confini di privacy e valore misurabile.",cta:"Dicci cosa vuoi costruire"},
+        Translated{slug:"ai-chat-automation",lang:"de",title:"KI-gestützter Support und Geschäftslösungen",eyebrow:"Unterstützen · automatisieren · verbessern",summary:"KI-Support, Wissenssuche und Workflow-Automatisierung mit selbst gehosteten oder verwalteten Modellen, menschlicher Übergabe und messbaren Kontrollen.",glance:"Gebaut mit denselben Schutzmaßnahmen für menschliche Übergabe und sichtbare Unsicherheit, die wir für die Pet-Care-KI-Plattform entworfen haben.",body:"<p class=\"lead\">Wir verwandeln KI in ein begrenztes Geschäftswerkzeug: Kundensupport, interne Wissenssuche, Dokumenten-Workflows und Produktunterstützung.</p><h2>Was wir liefern können</h2><ul><li>KI-gestützten Support mit menschlicher Übergabe und Gesprächsverlauf</li><li>RAG-Wissensassistenten, verankert in genehmigten Geschäftsinhalten</li><li>Selbst gehostete Open-Source-KI, wenn Datenschutz, Kontrolle oder vorhersehbare Nutzung dies rechtfertigen</li><li>Integrationen mit verwalteten Modellen, wenn Geschwindigkeit und Fähigkeit der bessere Kompromiss sind</li><li>Klassifizierung, Zusammenfassungen, Empfehlungen und Workflow-Automatisierung</li></ul><h2>Schutzmaßnahmen für den Produktivbetrieb</h2><p>Berechtigungen, Datengrenzen, Evaluierung, Kostenkontrolle, Beobachtbarkeit, Feedback und Eskalation werden mit der Funktion entworfen—nicht erst nach dem Start hinzugefügt.</p><h2>Beginnen Sie mit einem fokussierten Pilotprojekt</h2><p>Wir wählen einen wertvollen Workflow aus, definieren, was Erfolg bedeutet, und liefern eine überprüfbare erste Version, bevor wir erweitern.</p>",seo_title:"KI-Funktionen, Chat und intelligente Automatisierung | Italy Developers",seo_description:"Fügen Sie einem bestehenden Produkt nützliche KI hinzu oder bauen Sie einen neuen KI-gestützten Workflow mit klarer menschlicher Kontrolle, Datenschutzgrenzen und messbarem Wert.",cta:"Sagen Sie uns, was Sie bauen möchten"},
+        Translated{slug:"ai-chat-automation",lang:"fr",title:"Support et solutions métier basés sur l'IA",eyebrow:"Assister · automatiser · améliorer",summary:"Support IA, recherche de connaissances et automatisation des flux de travail avec des modèles auto-hébergés ou gérés, transfert humain et contrôles mesurables.",glance:"Construit avec les mêmes garanties de transfert humain et d'incertitude visible que nous avons conçues pour la plateforme Pet Care AI.",body:"<p class=\"lead\">Nous transformons l'IA en un outil métier borné : support client, recherche de connaissances internes, flux documentaires et assistance produit.</p><h2>Ce que nous pouvons livrer</h2><ul><li>Support activé par l'IA avec transfert humain et historique des conversations</li><li>Assistants de connaissances RAG ancrés dans du contenu métier approuvé</li><li>IA open-source auto-hébergée quand la confidentialité, le contrôle ou l'usage prévisible le justifient</li><li>Intégrations de modèles gérés quand la rapidité et la capacité sont le meilleur compromis</li><li>Classification, résumés, recommandations et automatisation des flux de travail</li></ul><h2>Garanties en production</h2><p>Permissions, limites des données, évaluation, contrôle des coûts, observabilité, retour d'expérience et escalade sont conçus avec la fonctionnalité—pas ajoutés après le lancement.</p><h2>Commencez par un pilote ciblé</h2><p>Nous sélectionnons un flux de travail à forte valeur, définissons ce que signifie le succès et livrons une première version vérifiable avant d'étendre.</p>",seo_title:"Fonctionnalités IA, chat et automatisation intelligente | Italy Developers",seo_description:"Ajoutez une IA utile à un produit existant ou construisez un nouveau flux de travail assisté par IA avec un contrôle humain clair, des limites de confidentialité et une valeur mesurable.",cta:"Dites-nous ce que vous voulez construire"},
+        Translated{slug:"ai-chat-automation",lang:"pt",title:"Suporte e soluções empresariais com IA",eyebrow:"Auxiliar · automatizar · melhorar",summary:"Suporte com IA, busca de conhecimento e automação de fluxos de trabalho com modelos self-hosted ou gerenciados, transferência para humanos e controles mensuráveis.",glance:"Construído com as mesmas proteções de transferência para humanos e incerteza visível que projetamos para a plataforma Pet Care AI.",body:"<p class=\"lead\">Transformamos a IA em uma ferramenta empresarial delimitada: suporte ao cliente, busca de conhecimento interno, fluxos de documentos e assistência de produto.</p><h2>O que podemos entregar</h2><ul><li>Suporte habilitado por IA com transferência para humanos e histórico de conversas</li><li>Assistentes de conhecimento RAG baseados em conteúdo empresarial aprovado</li><li>IA open-source self-hosted quando privacidade, controle ou uso previsível justificam</li><li>Integrações de modelos gerenciados quando velocidade e capacidade são a melhor escolha</li><li>Classificação, resumos, recomendações e automação de fluxos de trabalho</li></ul><h2>Proteções em produção</h2><p>Permissões, limites de dados, avaliação, controle de custos, observabilidade, feedback e escalonamento são projetados junto com o recurso—não adicionados após o lançamento.</p><h2>Comece com um piloto focado</h2><p>Selecionamos um fluxo de trabalho de alto valor, definimos o que significa sucesso e lançamos uma primeira versão revisável antes de expandir.</p>",seo_title:"Recursos de IA, chat e automação inteligente | Italy Developers",seo_description:"Adicione IA útil a um produto existente ou construa um novo fluxo de trabalho assistido por IA com controle humano claro, limites de privacidade e valor mensurável.",cta:"Diga-nos o que você quer construir"},
+
+        Translated{slug:"apis-integrations-backends",lang:"it",title:"API, integrazioni e backend affidabili",eyebrow:"Connettere · proteggere · scalare",summary:"Collega prodotti, pagamenti, dati e servizi di terze parti attraverso un backend sicuro, documentato e pronto a evolversi.",glance:"La stessa disciplina API dietro il nostro pacchetto pubblicato drf-shapeless-serializers e il backend di StoreMate.",body:"<p class=\"lead\">Un backend affidabile mantiene applicazioni rivolte ai clienti, strumenti interni e servizi esterni funzionanti come un unico prodotto.</p><h2>Cosa costruiamo</h2><ul><li>API REST e GraphQL</li><li>Autenticazione, permessi e flussi account</li><li>Pagamenti, email, OTP, notifiche e job in background</li><li>Progettazione database, ricerca ed endpoint di reportistica</li><li>Integrazioni con terze parti e sistemi legacy</li><li>Webhook, lavori pianificati e controlli di stato operativi</li></ul><h2>Tecnologia scelta per il requisito</h2><p>Python, Django e Django REST Framework offrono una solida base per sistemi aziendali e integrazioni. Rust e Actix Web si adattano a servizi che beneficiano di correttezza rigorosa, efficienza e prestazioni prevedibili.</p><h2>Qualità della consegna</h2><p>Validazione degli input, controllo degli accessi, rate limit, errori strutturati, documentazione API, test automatizzati, deployment Docker e hook di monitoraggio fanno parte di un backend serio, non extra opzionali.</p><h3>Prova nel nostro portfolio</h3><p>DRF Shapeless Serializers, le API di StoreMate, la GraphQL di Pet Care e il CMS Rust dimostrano capacità sia a livello di framework che di prodotto.</p>",seo_title:"API, integrazioni e backend affidabili | Italy Developers",seo_description:"Collega prodotti, pagamenti, dati e servizi di terze parti attraverso un backend sicuro, documentato e pronto a evolversi.",cta:"Dicci cosa vuoi costruire"},
+        Translated{slug:"apis-integrations-backends",lang:"de",title:"APIs, Integrationen und zuverlässige Backends",eyebrow:"Verbinden · sichern · skalieren",summary:"Verbinden Sie Produkte, Zahlungen, Daten und Drittanbieterdienste über ein sicheres, dokumentiertes und zukunftsfähiges Backend.",glance:"Die gleiche API-Disziplin hinter unserem veröffentlichten Paket drf-shapeless-serializers und dem Backend von StoreMate.",body:"<p class=\"lead\">Ein verlässliches Backend hält kundenorientierte Anwendungen, interne Tools und externe Dienste als ein Produkt funktionsfähig.</p><h2>Was wir bauen</h2><ul><li>REST- und GraphQL-APIs</li><li>Authentifizierung, Berechtigungen und Kontoabläufe</li><li>Zahlungen, E-Mail, OTP, Benachrichtigungen und Hintergrundjobs</li><li>Datenbankdesign, Such- und Berichts-Endpunkte</li><li>Integrationen mit Drittanbietern und Altsystemen</li><li>Webhooks, geplante Aufgaben und operative Health-Checks</li></ul><h2>Für den Bedarf gewählte Technologie</h2><p>Python, Django und Django REST Framework bieten eine solide Grundlage für Geschäftssysteme und Integrationen. Rust und Actix Web passen zu Diensten, die von strikter Korrektheit, Effizienz und vorhersehbarer Leistung profitieren.</p><h2>Lieferqualität</h2><p>Eingabevalidierung, Zugriffskontrolle, Rate Limits, strukturierte Fehler, API-Dokumentation, automatisierte Tests, Docker-Deployment und Monitoring-Hooks sind Teil eines ernsthaften Backends—keine optionalen Extras.</p><h3>Beleg in unserem Portfolio</h3><p>DRF Shapeless Serializers, StoreMate-APIs, Pet-Care-GraphQL und das Rust-CMS zeigen sowohl Framework- als auch Produktebene-Backend-Arbeit.</p>",seo_title:"APIs, Integrationen und zuverlässige Backends | Italy Developers",seo_description:"Verbinden Sie Produkte, Zahlungen, Daten und Drittanbieterdienste über ein sicheres, dokumentiertes und zukunftsfähiges Backend.",cta:"Sagen Sie uns, was Sie bauen möchten"},
+        Translated{slug:"apis-integrations-backends",lang:"fr",title:"API, intégrations et backends fiables",eyebrow:"Connecter · sécuriser · faire évoluer",summary:"Connectez produits, paiements, données et services tiers via un backend sécurisé, documenté et prêt à évoluer.",glance:"La même rigueur API derrière notre paquet publié drf-shapeless-serializers et le backend de StoreMate.",body:"<p class=\"lead\">Un backend fiable maintient les applications orientées client, les outils internes et les services externes fonctionnant comme un seul produit.</p><h2>Ce que nous construisons</h2><ul><li>API REST et GraphQL</li><li>Authentification, permissions et flux de compte</li><li>Paiements, e-mail, OTP, notifications et tâches en arrière-plan</li><li>Conception de base de données, recherche et points de terminaison de reporting</li><li>Intégrations avec des tiers et systèmes existants</li><li>Webhooks, tâches planifiées et contrôles de santé opérationnels</li></ul><h2>Technologie choisie pour le besoin</h2><p>Python, Django et Django REST Framework offrent une base solide pour les systèmes métier et les intégrations. Rust et Actix Web conviennent aux services qui bénéficient d'une exactitude stricte, d'efficacité et de performances prévisibles.</p><h2>Qualité de livraison</h2><p>Validation des entrées, contrôle d'accès, limites de débit, erreurs structurées, documentation API, tests automatisés, déploiement Docker et hooks de surveillance font partie d'un backend sérieux—pas des extras optionnels.</p><h3>Preuve dans notre portfolio</h3><p>DRF Shapeless Serializers, les API StoreMate, le GraphQL Pet Care et le CMS Rust démontrent un travail backend au niveau framework et produit.</p>",seo_title:"API, intégrations et backends fiables | Italy Developers",seo_description:"Connectez produits, paiements, données et services tiers via un backend sécurisé, documenté et prêt à évoluer.",cta:"Dites-nous ce que vous voulez construire"},
+        Translated{slug:"apis-integrations-backends",lang:"pt",title:"APIs, integrações e backends confiáveis",eyebrow:"Conectar · proteger · escalar",summary:"Conecte produtos, pagamentos, dados e serviços de terceiros por meio de um backend seguro, documentado e pronto para evoluir.",glance:"A mesma disciplina de API por trás do nosso pacote publicado drf-shapeless-serializers e do backend da StoreMate.",body:"<p class=\"lead\">Um backend confiável mantém aplicativos voltados ao cliente, ferramentas internas e serviços externos funcionando como um único produto.</p><h2>O que construímos</h2><ul><li>APIs REST e GraphQL</li><li>Autenticação, permissões e fluxos de conta</li><li>Pagamentos, e-mail, OTP, notificações e tarefas em segundo plano</li><li>Design de banco de dados, busca e endpoints de relatórios</li><li>Integrações com terceiros e sistemas legados</li><li>Webhooks, tarefas agendadas e verificações de saúde operacionais</li></ul><h2>Tecnologia escolhida para a necessidade</h2><p>Python, Django e Django REST Framework oferecem uma base sólida para sistemas empresariais e integrações. Rust e Actix Web se encaixam em serviços que se beneficiam de correção rigorosa, eficiência e desempenho previsível.</p><h2>Qualidade de entrega</h2><p>Validação de entrada, controle de acesso, limites de taxa, erros estruturados, documentação de API, testes automatizados, implantação Docker e ganchos de monitoramento fazem parte de um backend sério—não extras opcionais.</p><h3>Prova no nosso portfólio</h3><p>DRF Shapeless Serializers, as APIs da StoreMate, o GraphQL do Pet Care e o CMS Rust demonstram trabalho de backend em nível de framework e de produto.</p>",seo_title:"APIs, integrações e backends confiáveis | Italy Developers",seo_description:"Conecte produtos, pagamentos, dados e serviços de terceiros por meio de um backend seguro, documentado e pronto para evoluir.",cta:"Diga-nos o que você quer construir"},
+
+        Translated{slug:"modernisation-rescue-support",lang:"it",title:"Modernizzazione, recupero e supporto continuo del prodotto",eyebrow:"Verificare · riparare · evolvere",summary:"Prendi in carico un'applicazione incompleta, fragile o obsoleta, capisci cosa ha valore e portala verso una release mantenibile.",glance:"Il nostro primo output è sempre un audit onesto: cosa mantenere, cosa è rischioso e quanto costerebbe davvero una riscrittura.",body:"<p class=\"lead\">Potresti già avere codice, dati e utenti, ma nessun percorso affidabile in avanti. Possiamo verificare il prodotto e migliorarlo senza raccomandare automaticamente una riscrittura completa.</p><h2>Quando questo servizio aiuta</h2><ul><li>Uno sviluppatore o un'agenzia precedente non è più disponibile</li><li>Il deployment è inaffidabile o non documentato</li><li>L'interfaccia è difficile da usare su mobile</li><li>Sicurezza, permessi o backup non sono chiari</li><li>Le nuove funzionalità sono lente perché la struttura è fragile</li><li>Un prototipo ha bisogno di fondamenta pronte per la produzione</li></ul><h2>Il nostro primo output</h2><p>Una valutazione tecnica e di prodotto: cosa funziona, cosa è rischioso, cosa dovrebbe essere preservato e un piano di recupero graduale. Accessi critici, segreti e backup vengono affrontati prima delle modifiche estetiche.</p><h2>Possibili fasi successive</h2><p>Correzione di bug, modernizzazione dell'interfaccia, pulizia delle API, migrazione del database, containerizzazione, test, lavoro sulle prestazioni, hardening della sicurezza, documentazione e una release in produzione controllata.</p><h3>Nessuna riscrittura forzata</h3><p>Raccomandiamo la sostituzione solo quando le evidenze mostrano che la riparazione costerebbe di più o lascerebbe un rischio inaccettabile.</p>",seo_title:"Modernizzazione, recupero e supporto continuo del prodotto | Italy Developers",seo_description:"Prendi in carico un'applicazione incompleta, fragile o obsoleta, capisci cosa ha valore e portala verso una release mantenibile.",cta:"Dicci cosa vuoi costruire"},
+        Translated{slug:"modernisation-rescue-support",lang:"de",title:"Produktmodernisierung, Rettung und laufender Support",eyebrow:"Prüfen · reparieren · weiterentwickeln",summary:"Übernehmen Sie eine unfertige, fragile oder veraltete Anwendung, verstehen Sie, was wertvoll ist, und bringen Sie sie auf einen wartbaren Stand.",glance:"Unser erstes Ergebnis ist immer ein ehrliches Audit: was zu behalten ist, was riskant ist und was eine Neuentwicklung tatsächlich kosten würde.",body:"<p class=\"lead\">Sie haben vielleicht schon Code, Daten und Nutzer—aber keinen verlässlichen Weg nach vorn. Wir können das Produkt prüfen und verbessern, ohne automatisch eine komplette Neuentwicklung zu empfehlen.</p><h2>Wann dieser Service hilft</h2><ul><li>Ein früherer Entwickler oder eine Agentur ist nicht mehr verfügbar</li><li>Das Deployment ist unzuverlässig oder undokumentiert</li><li>Die Oberfläche ist auf Mobilgeräten schwierig zu bedienen</li><li>Sicherheit, Berechtigungen oder Backups sind unklar</li><li>Neue Funktionen sind langsam, weil die Struktur brüchig ist</li><li>Ein Prototyp braucht produktionsreife Grundlagen</li></ul><h2>Unser erstes Ergebnis</h2><p>Eine technische und produktbezogene Bewertung: was funktioniert, was riskant ist, was erhalten werden sollte, und ein stufenweiser Wiederherstellungsplan. Kritische Zugänge, Geheimnisse und Backups werden vor kosmetischen Änderungen angegangen.</p><h2>Mögliche nächste Phasen</h2><p>Fehlerbehebung, UI-Modernisierung, API-Bereinigung, Datenbankmigration, Containerisierung, Tests, Performance-Arbeit, Sicherheitshärtung, Dokumentation und eine kontrollierte Produktivfreigabe.</p><h3>Keine erzwungene Neuentwicklung</h3><p>Wir empfehlen einen Ersatz nur, wenn Belege zeigen, dass eine Reparatur mehr kosten oder ein inakzeptables Risiko hinterlassen würde.</p>",seo_title:"Produktmodernisierung, Rettung und laufender Support | Italy Developers",seo_description:"Übernehmen Sie eine unfertige, fragile oder veraltete Anwendung, verstehen Sie, was wertvoll ist, und bringen Sie sie auf einen wartbaren Stand.",cta:"Sagen Sie uns, was Sie bauen möchten"},
+        Translated{slug:"modernisation-rescue-support",lang:"fr",title:"Modernisation, sauvetage et support continu de produit",eyebrow:"Auditer · réparer · faire évoluer",summary:"Reprenez une application inachevée, fragile ou obsolète, comprenez ce qui a de la valeur et faites-la évoluer vers une version maintenable.",glance:"Notre premier livrable est toujours un audit honnête : quoi garder, quoi est risqué et ce que coûterait vraiment une réécriture.",body:"<p class=\"lead\">Vous avez peut-être déjà du code, des données et des utilisateurs—mais aucun chemin fiable à suivre. Nous pouvons auditer le produit et l'améliorer sans recommander automatiquement une réécriture complète.</p><h2>Quand ce service aide</h2><ul><li>Un développeur ou une agence précédente n'est plus disponible</li><li>Le déploiement est peu fiable ou non documenté</li><li>L'interface est difficile sur mobile</li><li>La sécurité, les permissions ou les sauvegardes ne sont pas claires</li><li>Les nouvelles fonctionnalités sont lentes car la structure est fragile</li><li>Un prototype a besoin de fondations de production</li></ul><h2>Notre premier livrable</h2><p>Une évaluation technique et produit : ce qui fonctionne, ce qui est risqué, ce qui doit être préservé, et un plan de récupération par phases. Les accès critiques, secrets et sauvegardes sont traités avant les changements cosmétiques.</p><h2>Phases suivantes possibles</h2><p>Correction de bugs, modernisation de l'interface, nettoyage des API, migration de base de données, conteneurisation, tests, travail de performance, renforcement de la sécurité, documentation et une mise en production contrôlée.</p><h3>Aucune réécriture forcée</h3><p>Nous ne recommandons un remplacement que lorsque les preuves montrent qu'une réparation coûterait plus cher ou laisserait un risque inacceptable.</p>",seo_title:"Modernisation, sauvetage et support continu de produit | Italy Developers",seo_description:"Reprenez une application inachevée, fragile ou obsolète, comprenez ce qui a de la valeur et faites-la évoluer vers une version maintenable.",cta:"Dites-nous ce que vous voulez construire"},
+        Translated{slug:"modernisation-rescue-support",lang:"pt",title:"Modernização, resgate e suporte contínuo de produto",eyebrow:"Auditar · reparar · evoluir",summary:"Assuma um aplicativo inacabado, frágil ou desatualizado, entenda o que tem valor e leve-o a uma versão sustentável.",glance:"Nossa primeira entrega é sempre uma auditoria honesta: o que manter, o que é arriscado e quanto uma reescrita realmente custaria.",body:"<p class=\"lead\">Você já pode ter código, dados e usuários—mas nenhum caminho confiável a seguir. Podemos auditar o produto e melhorá-lo sem recomendar automaticamente uma reescrita completa.</p><h2>Quando este serviço ajuda</h2><ul><li>Um desenvolvedor ou agência anterior não está mais disponível</li><li>A implantação é pouco confiável ou não documentada</li><li>A interface é difícil no celular</li><li>Segurança, permissões ou backups não estão claros</li><li>Novos recursos são lentos porque a estrutura é frágil</li><li>Um protótipo precisa de bases prontas para produção</li></ul><h2>Nossa primeira entrega</h2><p>Uma avaliação técnica e de produto: o que funciona, o que é arriscado, o que deve ser preservado e um plano de recuperação em fases. Acessos críticos, segredos e backups são tratados antes de mudanças estéticas.</p><h2>Possíveis próximas fases</h2><p>Correção de bugs, modernização de UI, limpeza de API, migração de banco de dados, containerização, testes, trabalho de performance, hardening de segurança, documentação e um lançamento em produção controlado.</p><h3>Sem reescrita forçada</h3><p>Recomendamos a substituição apenas quando as evidências mostram que o reparo custaria mais ou deixaria um risco inaceitável.</p>",seo_title:"Modernização, resgate e suporte contínuo de produto | Italy Developers",seo_description:"Assuma um aplicativo inacabado, frágil ou desatualizado, entenda o que tem valor e leve-o a uma versão sustentável.",cta:"Diga-nos o que você quer construir"},
+    ];
+    apply_translations(db, "service", &rows).await
 }
 
 async fn apply_project_proof_v9(db: &Database, now: DateTime) -> Result<(), AppError> {
@@ -809,24 +961,43 @@ async fn apply_project_proof_v9(db: &Database, now: DateTime) -> Result<(), AppE
         ("pet-care-proof","Pet Care AI","Upcoming · Responsible AI","Owner-scoped pet profiles and probabilistic dog audio analysis designed with visible uncertainty and clear safety boundaries.","/media/covers/work/pet-care-ai-upcoming.svg","pet-care-ai-upcoming")
     ];
     for (order, (slug, title, eyebrow, summary, image, work_slug)) in proof.into_iter().enumerate() {
-        let item = ContentItem { id:None, kind:"testimonial".into(), slug:slug.into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:"Verified portfolio evidence. No client quote or performance claim is implied.".into(), image:image.into(), image_alt:format!("{title} project preview"), seo_title:String::new(), seo_description:String::new(), keywords:String::new(), cta:"View the work".into(), link:format!("/work/{work_slug}"), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
-        content(db).replace_one(doc! {"kind":"testimonial","slug":slug}, item).upsert(true).await?;
+        let item = ContentItem { id:None, kind:"testimonial".into(), slug:slug.into(), lang:"en".into(), title:title.into(), eyebrow:eyebrow.into(), summary:summary.into(), glance:String::new(), body:"Verified portfolio evidence. No client quote or performance claim is implied.".into(), image:image.into(), image_alt:format!("{title} project preview"), seo_title:String::new(), seo_description:String::new(), keywords:String::new(), cta:"View the work".into(), link:format!("/work/{work_slug}"), featured:true, published:true, order:order as i32, created_at:now, updated_at:now };
+        content(db).replace_one(doc! {"kind":"testimonial","slug":slug,"lang":"en"}, item).upsert(true).await?;
     }
     Ok(())
 }
 
-async fn list_kind(db: &Database, kind: &str) -> Result<Vec<ContentItem>, AppError> {
+/// Keeps, per slug, the entry matching `lang` if present, else the English one.
+/// Input must already be sorted by (order, created_at) — order is preserved.
+fn prefer_lang(items: Vec<ContentItem>, lang: &str) -> Vec<ContentItem> {
+    let mut by_slug: std::collections::HashMap<String, ContentItem> = std::collections::HashMap::new();
+    for item in items {
+        match by_slug.get(&item.slug) {
+            Some(existing) if existing.lang == lang => {}
+            _ => {
+                by_slug.insert(item.slug.clone(), item);
+            }
+        }
+    }
+    let mut out: Vec<ContentItem> = by_slug.into_values().collect();
+    out.sort_by(|a, b| a.order.cmp(&b.order).then(b.created_at.cmp(&a.created_at)));
+    out
+}
+async fn list_kind(db: &Database, kind: &str, lang: &str) -> Result<Vec<ContentItem>, AppError> {
     ensure_seed(db).await?;
-    Ok(content(db)
-        .find(doc! {"kind":kind,"published":true})
+    let langs: Vec<&str> = if lang == "en" { vec!["en"] } else { vec![lang, "en"] };
+    let items: Vec<ContentItem> = content(db)
+        .find(doc! {"kind":kind,"published":true,"lang":{"$in":langs}})
         .sort(doc! {"order":1,"created_at":-1})
         .await?
         .try_collect()
-        .await?)
+        .await?;
+    Ok(prefer_lang(items, lang))
 }
 async fn list_home_kind(
     db: &Database,
     kind: &str,
+    lang: &str,
     enabled: bool,
     limit: i64,
 ) -> Result<Vec<ContentItem>, AppError> {
@@ -834,13 +1005,16 @@ async fn list_home_kind(
         return Ok(Vec::new());
     }
     ensure_seed(db).await?;
-    Ok(content(db)
-        .find(doc! {"kind":kind,"published":true,"featured":true})
+    let langs: Vec<&str> = if lang == "en" { vec!["en"] } else { vec![lang, "en"] };
+    let items: Vec<ContentItem> = content(db)
+        .find(doc! {"kind":kind,"published":true,"featured":true,"lang":{"$in":langs}})
         .sort(doc! {"order":1,"created_at":-1})
-        .limit(limit.clamp(1, 24))
         .await?
         .try_collect()
-        .await?)
+        .await?;
+    let mut merged = prefer_lang(items, lang);
+    merged.truncate(limit.clamp(1, 24) as usize);
+    Ok(merged)
 }
 
 /// Every "Published + Show on home" item is a *candidate* for its home-page section,
@@ -873,7 +1047,7 @@ async fn hidden_by_home_limit(
     hidden.extend(
         overflow(
             db,
-            doc! {"kind":"service","published":true,"featured":true},
+            doc! {"kind":"service","published":true,"featured":true,"lang":"en"},
             settings.show_services,
             settings.service_limit,
         )
@@ -882,7 +1056,7 @@ async fn hidden_by_home_limit(
     hidden.extend(
         overflow(
             db,
-            doc! {"kind":"work","published":true,"featured":true},
+            doc! {"kind":"work","published":true,"featured":true,"lang":"en"},
             settings.show_work,
             settings.work_limit,
         )
@@ -891,7 +1065,7 @@ async fn hidden_by_home_limit(
     hidden.extend(
         overflow(
             db,
-            doc! {"kind":"testimonial","published":true,"featured":true},
+            doc! {"kind":"testimonial","published":true,"featured":true,"lang":"en"},
             settings.show_testimonials,
             settings.testimonial_limit,
         )
@@ -900,7 +1074,7 @@ async fn hidden_by_home_limit(
     hidden.extend(
         overflow(
             db,
-            doc! {"kind":{"$in":["insight","blog"]},"published":true,"featured":true},
+            doc! {"kind":{"$in":["insight","blog"]},"published":true,"featured":true,"lang":"en"},
             settings.show_insights,
             settings.insight_limit,
         )
@@ -908,128 +1082,174 @@ async fn hidden_by_home_limit(
     );
     Ok(hidden)
 }
-async fn one(db: &Database, kind: &str, slug: &str) -> Result<ContentItem, AppError> {
+async fn one(db: &Database, kind: &str, slug: &str, lang: &str) -> Result<ContentItem, AppError> {
     ensure_seed(db).await?;
-    content(db)
-        .find_one(doc! {"kind":kind,"slug":slug,"published":true})
+    if let Some(item) = content(db)
+        .find_one(doc! {"kind":kind,"slug":slug,"lang":lang,"published":true})
         .await?
-        .ok_or(AppError::NotFound)
+    {
+        return Ok(item);
+    }
+    if lang != "en" {
+        if let Some(item) = content(db)
+            .find_one(doc! {"kind":kind,"slug":slug,"lang":"en","published":true})
+            .await?
+        {
+            return Ok(item);
+        }
+    }
+    Err(AppError::NotFound)
 }
-
-async fn home(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
-    let settings = home_settings(&db).await?;
-    let mut insights = list_home_kind(
-        &db,
-        "insight",
-        settings.show_insights,
-        settings.insight_limit,
-    )
-    .await?;
-    insights.extend(
-        list_home_kind(
-            &db,
-            "blog",
-            settings.show_insights,
-            settings.insight_limit,
-        )
-        .await?,
-    );
+async fn home_page(db: &Database, lang: &str) -> Result<HttpResponse, AppError> {
+    let settings = home_settings(db).await?;
+    let mut insights = list_home_kind(db, "insight", lang, settings.show_insights, settings.insight_limit).await?;
+    insights.extend(list_home_kind(db, "blog", lang, settings.show_insights, settings.insight_limit).await?);
     insights.sort_by_key(|item| item.order);
     insights.truncate(settings.insight_limit.clamp(0, 24) as usize);
+    let t = i18n::ui(lang);
     html(HomeTemplate {
-        services: list_home_kind(
-            &db,
-            "service",
-            settings.show_services,
-            settings.service_limit,
-        )
-        .await?,
-        work: list_home_kind(&db, "work", settings.show_work, settings.work_limit).await?,
+        services: list_home_kind(db, "service", lang, settings.show_services, settings.service_limit).await?,
+        work: list_home_kind(db, "work", lang, settings.show_work, settings.work_limit).await?,
         insights,
-        testimonials: list_home_kind(
-            &db,
-            "testimonial",
-            settings.show_testimonials,
-            settings.testimonial_limit,
-        )
-        .await?,
+        testimonials: list_home_kind(db, "testimonial", lang, settings.show_testimonials, settings.testimonial_limit).await?,
+        lang: t.lang.into(),
+        prefix: i18n::prefix_for(t.lang),
+        path_no_prefix: "/".into(),
+        t,
     })
 }
-#[allow(clippy::too_many_arguments)]
+
+/// For unprefixed pages (contact/login/register) that still show localized
+/// chrome based on the visitor's last-chosen language, if any.
+fn lang_from_cookie(req: &HttpRequest) -> &'static str {
+    req.cookie("lang")
+        .map(|c| i18n::normalize(c.value()))
+        .unwrap_or("en")
+}
+fn lang_cookie(lang: &str) -> actix_web::cookie::Cookie<'static> {
+    actix_web::cookie::Cookie::build("lang", lang.to_string())
+        .path("/")
+        .max_age(actix_web::cookie::time::Duration::days(365))
+        .finish()
+}
+
+/// `/` — detects a language from the `lang` cookie or `Accept-Language`
+/// header and 302s to `/{lang}/`; otherwise serves English directly. Deep
+/// links to interior pages never force-redirect like this.
+async fn root(req: HttpRequest, db: web::Data<Database>) -> Result<HttpResponse, AppError> {
+    let redirect_lang: Option<&'static str> = match req.cookie("lang") {
+        Some(c) if i18n::is_supported_locale(c.value()) => Some(i18n::normalize(c.value())),
+        Some(_) => None,
+        None => req
+            .headers()
+            .get(header::ACCEPT_LANGUAGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(i18n::best_supported_from_accept_language),
+    };
+    if let Some(lang) = redirect_lang {
+        return Ok(HttpResponse::Found()
+            .append_header((header::LOCATION, format!("/{lang}/")))
+            .cookie(lang_cookie(lang))
+            .finish());
+    }
+    let mut resp = home_page(&db, "en").await?;
+    let _ = resp.add_cookie(&lang_cookie("en"));
+    Ok(resp)
+}
+async fn home_localized(db: web::Data<Database>, path: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let lang = i18n::normalize(&path);
+    let mut resp = home_page(&db, lang).await?;
+    let _ = resp.add_cookie(&lang_cookie(lang));
+    Ok(resp)
+}
+
 async fn collection_page(
     db: &Database,
     kind: &str,
-    title: &str,
-    description: &str,
+    lang: &str,
+    copy: i18n::CollectionCopy,
     path: &str,
-    eyebrow: &str,
-    heading: &str,
-    intro: &str,
 ) -> Result<HttpResponse, AppError> {
+    let t = i18n::ui(lang);
+    let prefix = i18n::prefix_for(lang);
     html(CollectionTemplate {
-        title: title.into(),
-        description: description.into(),
-        canonical: path.into(),
-        eyebrow: eyebrow.into(),
-        heading: heading.into(),
-        intro: intro.into(),
+        title: copy.title.into(),
+        description: copy.description.into(),
+        canonical: format!("{prefix}{path}"),
+        eyebrow: copy.eyebrow.into(),
+        heading: copy.heading.into(),
+        intro: copy.intro.into(),
         kind: kind.into(),
-        items: list_kind(db, kind).await?,
+        items: list_kind(db, kind, lang).await?,
+        lang: t.lang.into(),
+        path_no_prefix: path.into(),
+        prefix,
+        t,
     })
 }
 async fn services(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
-    collection_page(&db,"service","Custom Software and Digital Product Services in Italy | Italy Developers","From websites and business systems to apps, AI and integrations: end-to-end digital product delivery for people and organisations in Italy.","/services","What we can build","Bring the problem. We will shape the right product.","Websites, commerce, custom software, mobile and desktop apps, AI features, APIs and product rescue—planned around the outcome you need, not a fixed technology menu.").await
+    collection_page(&db, "service", "en", i18n::ui("en").services, "/services").await
+}
+async fn services_i18n(db: web::Data<Database>, lang: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let lang = i18n::normalize(&lang);
+    collection_page(&db, "service", lang, i18n::ui(lang).services, "/services").await
 }
 async fn work(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
-    collection_page(&db,"work","Application and Software Portfolio | Italy Developers","Real application, API, dashboard and platform work that shows what the Italy Developers community can deliver for Italy.","/work","Community portfolio","Real products. Verified capabilities. No invented results.","Worldwide developer experience brought together for Italy’s local businesses and individuals.").await
+    collection_page(&db, "work", "en", i18n::ui("en").work, "/work").await
+}
+async fn work_i18n(db: web::Data<Database>, lang: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let lang = i18n::normalize(&lang);
+    collection_page(&db, "work", lang, i18n::ui(lang).work, "/work").await
 }
 async fn insights(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
-    collection_page(&db,"insight","Digital Guides for Italian Small Businesses | Italy Developers","Straightforward website, cost and digital strategy guides for Italian small-business owners.","/insights","Insights","Make better digital decisions.","Clear guidance for owners who need value, not technical theatre.").await
+    collection_page(&db, "insight", "en", i18n::ui("en").insights, "/insights").await
+}
+async fn insights_i18n(db: web::Data<Database>, lang: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let lang = i18n::normalize(&lang);
+    collection_page(&db, "insight", lang, i18n::ui(lang).insights, "/insights").await
 }
 async fn blog(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
-    collection_page(
-        &db,
-        "blog",
-        "Small Business Web & SEO Blog Italy | Italy Developers",
-        "Practical local SEO, website and online growth articles for small businesses in Italy.",
-        "/blog",
-        "The blog",
-        "Practical ideas for earning attention online.",
-        "Useful, jargon-free articles for Italian entrepreneurs and individual professionals.",
-    )
-    .await
+    collection_page(&db, "blog", "en", i18n::ui("en").blog, "/blog").await
+}
+async fn blog_i18n(db: web::Data<Database>, lang: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let lang = i18n::normalize(&lang);
+    collection_page(&db, "blog", lang, i18n::ui(lang).blog, "/blog").await
 }
 async fn tech_stack(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
-    collection_page(
-        &db,
-        "tech",
-        "Technology Stack | Italy Developers",
-        "The secure, efficient technology behind our affordable websites and software.",
-        "/tech-stack",
-        "Technology",
-        "Modern tools, selected for value.",
-        "A maintainable stack that keeps sites fast, secure and affordable to operate.",
-    )
-    .await
+    collection_page(&db, "tech", "en", i18n::ui("en").tech, "/tech-stack").await
+}
+async fn tech_stack_i18n(db: web::Data<Database>, lang: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let lang = i18n::normalize(&lang);
+    collection_page(&db, "tech", lang, i18n::ui(lang).tech, "/tech-stack").await
 }
 async fn about(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
-    collection_page(&db,"about","About Italy Developers | Global Community Serving Italy","Italy Developers is a worldwide developer community working exclusively for Italy’s local businesses and individuals.","/about","About the community","Developers worldwide. One mission: technology for Italy.","Anyone with useful technical skills can join from anywhere. Every client project remains dedicated exclusively to people and organisations in Italy.").await
+    collection_page(&db, "about", "en", i18n::ui("en").about, "/about").await
+}
+async fn about_i18n(db: web::Data<Database>, lang: web::Path<String>) -> Result<HttpResponse, AppError> {
+    let lang = i18n::normalize(&lang);
+    collection_page(&db, "about", lang, i18n::ui(lang).about, "/about").await
 }
 async fn detail(
     db: &Database,
     session: &Session,
     kind: &str,
     slug: &str,
+    lang: &str,
     path: &str,
     schema: &str,
 ) -> Result<HttpResponse, AppError> {
-    let item = one(db, kind, slug).await?;
+    let item = one(db, kind, slug, lang).await?;
     let comments = if kind == "blog" { ensure_official_starter(db, slug).await?; comment_views(db, slug).await? } else { Vec::new() };
     let post_likes = if kind == "blog" {
         blog_reactions(db).count_documents(doc! {"target":format!("post:{slug}")}).await? as i64
     } else { 0 };
+    let t = i18n::ui(lang);
+    let prefix = i18n::prefix_for(lang);
     html(DetailTemplate {
-        canonical: format!("{}/{}", path, item.slug),
+        canonical: format!("{prefix}{path}/{}", item.slug),
+        path_no_prefix: format!("{path}/{}", item.slug),
+        lang: t.lang.into(),
+        prefix,
         item,
         schema_type: schema.into(),
         csrf: csrf(session)?,
@@ -1037,49 +1257,50 @@ async fn detail(
         post_likes,
         authenticated: authenticated(session),
         viewer_name: session.get::<String>("name").ok().flatten().unwrap_or_default(),
+        t,
     })
 }
-async fn service_detail(
-    session: Session,
-    db: web::Data<Database>,
-    slug: web::Path<String>,
-) -> Result<HttpResponse, AppError> {
-    detail(&db, &session, "service", &slug, "/services", "Service").await
+async fn service_detail(session: Session, db: web::Data<Database>, slug: web::Path<String>) -> Result<HttpResponse, AppError> {
+    detail(&db, &session, "service", &slug, "en", "/services", "Service").await
 }
-async fn work_detail(
-    session: Session,
-    db: web::Data<Database>,
-    slug: web::Path<String>,
-) -> Result<HttpResponse, AppError> {
-    detail(&db, &session, "work", &slug, "/work", "CreativeWork").await
+async fn service_detail_i18n(session: Session, db: web::Data<Database>, path: web::Path<(String, String)>) -> Result<HttpResponse, AppError> {
+    let (lang, slug) = path.into_inner();
+    detail(&db, &session, "service", &slug, i18n::normalize(&lang), "/services", "Service").await
 }
-async fn insight_detail(
-    session: Session,
-    db: web::Data<Database>,
-    slug: web::Path<String>,
-) -> Result<HttpResponse, AppError> {
-    detail(&db, &session, "insight", &slug, "/insights", "Article").await
+async fn work_detail(session: Session, db: web::Data<Database>, slug: web::Path<String>) -> Result<HttpResponse, AppError> {
+    detail(&db, &session, "work", &slug, "en", "/work", "CreativeWork").await
 }
-async fn blog_detail(
-    session: Session,
-    db: web::Data<Database>,
-    slug: web::Path<String>,
-) -> Result<HttpResponse, AppError> {
-    detail(&db, &session, "blog", &slug, "/blog", "BlogPosting").await
+async fn work_detail_i18n(session: Session, db: web::Data<Database>, path: web::Path<(String, String)>) -> Result<HttpResponse, AppError> {
+    let (lang, slug) = path.into_inner();
+    detail(&db, &session, "work", &slug, i18n::normalize(&lang), "/work", "CreativeWork").await
 }
-async fn tech_detail(
-    session: Session,
-    db: web::Data<Database>,
-    slug: web::Path<String>,
-) -> Result<HttpResponse, AppError> {
-    detail(&db, &session, "tech", &slug, "/tech-stack", "TechArticle").await
+async fn insight_detail(session: Session, db: web::Data<Database>, slug: web::Path<String>) -> Result<HttpResponse, AppError> {
+    detail(&db, &session, "insight", &slug, "en", "/insights", "Article").await
 }
-async fn about_detail(
-    session: Session,
-    db: web::Data<Database>,
-    slug: web::Path<String>,
-) -> Result<HttpResponse, AppError> {
-    detail(&db, &session, "about", &slug, "/about", "AboutPage").await
+async fn insight_detail_i18n(session: Session, db: web::Data<Database>, path: web::Path<(String, String)>) -> Result<HttpResponse, AppError> {
+    let (lang, slug) = path.into_inner();
+    detail(&db, &session, "insight", &slug, i18n::normalize(&lang), "/insights", "Article").await
+}
+async fn blog_detail(session: Session, db: web::Data<Database>, slug: web::Path<String>) -> Result<HttpResponse, AppError> {
+    detail(&db, &session, "blog", &slug, "en", "/blog", "BlogPosting").await
+}
+async fn blog_detail_i18n(session: Session, db: web::Data<Database>, path: web::Path<(String, String)>) -> Result<HttpResponse, AppError> {
+    let (lang, slug) = path.into_inner();
+    detail(&db, &session, "blog", &slug, i18n::normalize(&lang), "/blog", "BlogPosting").await
+}
+async fn tech_detail(session: Session, db: web::Data<Database>, slug: web::Path<String>) -> Result<HttpResponse, AppError> {
+    detail(&db, &session, "tech", &slug, "en", "/tech-stack", "TechArticle").await
+}
+async fn tech_detail_i18n(session: Session, db: web::Data<Database>, path: web::Path<(String, String)>) -> Result<HttpResponse, AppError> {
+    let (lang, slug) = path.into_inner();
+    detail(&db, &session, "tech", &slug, i18n::normalize(&lang), "/tech-stack", "TechArticle").await
+}
+async fn about_detail(session: Session, db: web::Data<Database>, slug: web::Path<String>) -> Result<HttpResponse, AppError> {
+    detail(&db, &session, "about", &slug, "en", "/about", "AboutPage").await
+}
+async fn about_detail_i18n(session: Session, db: web::Data<Database>, path: web::Path<(String, String)>) -> Result<HttpResponse, AppError> {
+    let (lang, slug) = path.into_inner();
+    detail(&db, &session, "about", &slug, i18n::normalize(&lang), "/about", "AboutPage").await
 }
 
 async fn comment_views(db: &Database, slug: &str) -> Result<Vec<CommentView>, AppError> {
@@ -1140,7 +1361,7 @@ struct CommentForm { body: String, parent_id: Option<String>, csrf: String }
 async fn add_blog_comment(req: HttpRequest, session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<CommentForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
     let user_id = member_id(&session)?;
-    one(&db, "blog", &slug).await?;
+    one(&db, "blog", &slug, "en").await?;
     let author = session.get::<String>("name").map_err(|_| AppError::Forbidden)?.unwrap_or_default();
     let body = form.body.trim();
     if !(2..=80).contains(&author.chars().count()) || !(3..=2000).contains(&body.chars().count()) { return Err(AppError::BadRequest); }
@@ -1175,7 +1396,7 @@ fn wants_json(req: &HttpRequest) -> bool { req.headers().get(header::ACCEPT).and
 
 async fn toggle_blog_like(req: HttpRequest, session: Session, db: web::Data<Database>, slug: web::Path<String>, form: web::Form<LikeForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
-    one(&db, "blog", &slug).await?;
+    one(&db, "blog", &slug, "en").await?;
     let active = toggle_reaction(&session, &db, format!("post:{}", slug)).await?;
     let count = blog_reactions(&db).count_documents(doc! {"target":format!("post:{}", slug)}).await?;
     if wants_json(&req) { return Ok(HttpResponse::Ok().json(serde_json::json!({"active":active,"count":count}))); }
@@ -1214,10 +1435,15 @@ fn csrf(session: &Session) -> Result<String, AppError> {
         .map_err(|_| AppError::BadRequest)?;
     Ok(token)
 }
-async fn contact_page(session: Session) -> Result<HttpResponse, AppError> {
+async fn contact_page(req: HttpRequest, session: Session) -> Result<HttpResponse, AppError> {
+    let lang = lang_from_cookie(&req);
     html(ContactTemplate {
         csrf: csrf(&session)?,
         success: false,
+        lang: lang.into(),
+        prefix: String::new(),
+        path_no_prefix: "/contact".into(),
+        t: i18n::ui(lang),
     })
 }
 #[derive(Deserialize, Validate)]
@@ -1237,6 +1463,7 @@ struct ContactForm {
     csrf: String,
 }
 async fn submit_contact(
+    req: HttpRequest,
     session: Session,
     db: web::Data<Database>,
     form: web::Form<ContactForm>,
@@ -1262,9 +1489,14 @@ async fn submit_contact(
         })
         .await?;
     session.remove("csrf");
+    let lang = lang_from_cookie(&req);
     html(ContactTemplate {
         csrf: String::new(),
         success: true,
+        lang: lang.into(),
+        prefix: String::new(),
+        path_no_prefix: "/contact".into(),
+        t: i18n::ui(lang),
     })
 }
 
@@ -1374,15 +1606,22 @@ fn safe_next(value: &str) -> String {
     if value.starts_with('/') && !value.starts_with("//") { value.into() } else { "/".into() }
 }
 
-async fn member_login(session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
-    html(MemberAuthTemplate { register:false, next:safe_next(query.next.as_deref().unwrap_or("/")), error:String::new(), csrf:csrf(&session)? })
+#[allow(clippy::too_many_arguments)]
+fn member_auth_template(req: &HttpRequest, register: bool, next: String, error: String, csrf: String) -> MemberAuthTemplate {
+    let lang = lang_from_cookie(req);
+    let path = if register { "/register" } else { "/login" };
+    MemberAuthTemplate { register, next, error, csrf, lang: lang.into(), prefix: String::new(), path_no_prefix: path.into(), t: i18n::ui(lang) }
 }
 
-async fn member_register(session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
-    html(MemberAuthTemplate { register:true, next:safe_next(query.next.as_deref().unwrap_or("/")), error:String::new(), csrf:csrf(&session)? })
+async fn member_login(req: HttpRequest, session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    html(member_auth_template(&req, false, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
 }
 
-async fn member_auth(session: Session, db: web::Data<Database>, form: web::Form<MemberLoginForm>) -> Result<HttpResponse, AppError> {
+async fn member_register(req: HttpRequest, session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    html(member_auth_template(&req, true, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
+}
+
+async fn member_auth(req: HttpRequest, session: Session, db: web::Data<Database>, form: web::Form<MemberLoginForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
     let email = form.email.trim().to_lowercase();
     if let Some(user) = users(&db).find_one(doc! {"email":&email,"active":true}).await? {
@@ -1395,18 +1634,18 @@ async fn member_auth(session: Session, db: web::Data<Database>, form: web::Form<
             return Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, safe_next(&form.next))).finish());
         }
     }
-    Ok(HttpResponse::Unauthorized().content_type("text/html; charset=utf-8").body(MemberAuthTemplate { register:false, next:safe_next(&form.next), error:"Email or password is incorrect.".into(), csrf:csrf(&session)? }.render()?))
+    Ok(HttpResponse::Unauthorized().content_type("text/html; charset=utf-8").body(member_auth_template(&req, false, safe_next(&form.next), "Email or password is incorrect.".into(), csrf(&session)?).render()?))
 }
 
-async fn member_create(session: Session, db: web::Data<Database>, form: web::Form<MemberRegisterForm>) -> Result<HttpResponse, AppError> {
+async fn member_create(req: HttpRequest, session: Session, db: web::Data<Database>, form: web::Form<MemberRegisterForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
     let name = form.name.trim();
     let email = form.email.trim().to_lowercase();
     if !(2..=80).contains(&name.chars().count()) || !email.contains('@') || email.len() > 254 || form.password.len() < 12 {
-        return Ok(HttpResponse::UnprocessableEntity().content_type("text/html; charset=utf-8").body(MemberAuthTemplate { register:true, next:safe_next(&form.next), error:"Use your real name, a valid email and a password of at least 12 characters.".into(), csrf:csrf(&session)? }.render()?));
+        return Ok(HttpResponse::UnprocessableEntity().content_type("text/html; charset=utf-8").body(member_auth_template(&req, true, safe_next(&form.next), "Use your real name, a valid email and a password of at least 12 characters.".into(), csrf(&session)?).render()?));
     }
     if users(&db).count_documents(doc! {"email":&email}).await? > 0 {
-        return Ok(HttpResponse::Conflict().content_type("text/html; charset=utf-8").body(MemberAuthTemplate { register:true, next:safe_next(&form.next), error:"An account already exists for this email.".into(), csrf:csrf(&session)? }.render()?));
+        return Ok(HttpResponse::Conflict().content_type("text/html; charset=utf-8").body(member_auth_template(&req, true, safe_next(&form.next), "An account already exists for this email.".into(), csrf(&session)?).render()?));
     }
     let inserted = users(&db).insert_one(AdminUser { id:None, name:name.into(), email:email.clone(), password_hash:bcrypt::hash(&form.password, bcrypt::DEFAULT_COST).map_err(|_| AppError::BadRequest)?, role:"member".into(), active:true, created_at:DateTime::now() }).await?;
     session.renew();
@@ -1684,6 +1923,7 @@ async fn admin_save(
     } else {
         previous.as_ref().map(|v| v.published).unwrap_or(false)
     };
+    let lang = f.get("lang").map(|v| i18n::normalize(v)).unwrap_or("en");
     let mut item = ContentItem {
         id: existing,
         kind: f.get("kind").cloned().unwrap_or_default(),
@@ -1693,6 +1933,7 @@ async fn admin_save(
             .unwrap_or_default()
             .trim()
             .to_lowercase(),
+        lang: lang.into(),
         title: f.get("title").cloned().unwrap_or_default().trim().into(),
         eyebrow: f.get("eyebrow").cloned().unwrap_or_default(),
         summary: f.get("summary").cloned().unwrap_or_default().trim().into(),
@@ -1753,12 +1994,12 @@ async fn admin_save(
     if !slug_valid(&item.slug) {
         errors.slug = "Use lowercase letters, numbers and single hyphens only.".into()
     } else {
-        let mut filter = doc! {"slug":&item.slug,"kind":&item.kind};
+        let mut filter = doc! {"slug":&item.slug,"kind":&item.kind,"lang":&item.lang};
         if let Some(id) = existing {
             filter.insert("_id", doc! {"$ne":id});
         }
         if content(&db).count_documents(filter).await? > 0 {
-            errors.slug = "This URL slug is already in use for this content type.".into()
+            errors.slug = "This URL slug is already in use for this content type and language.".into()
         }
     }
     if item.summary.len() < 20 || item.summary.len() > 400 {
@@ -1917,7 +2158,7 @@ async fn content_cover(db: web::Data<Database>, path: web::Path<(String, String)
     use std::hash::{Hash, Hasher};
     let (kind, slug) = path.into_inner();
     if !["service","work","tech","about","insight","blog","testimonial"].contains(&kind.as_str()) || !slug_valid(&slug) { return Err(AppError::NotFound); }
-    let item = one(&db, &kind, &slug).await?;
+    let item = one(&db, &kind, &slug, "en").await?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{kind}:{slug}").hash(&mut hasher);
     let hash = hasher.finish();
@@ -1951,6 +2192,30 @@ async fn ready(db: web::Data<Database>) -> HttpResponse {
 async fn robots(config: web::Data<Config>) -> HttpResponse {
     HttpResponse::Ok().content_type("text/plain; charset=utf-8").body(format!("User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /health/\nSitemap: {}/sitemap.xml\n",config.public_url.trim_end_matches('/')))
 }
+/// Emits one `<url>` per locale for `suffix` (e.g. "/services/some-slug"),
+/// each carrying `hreflang` siblings to the other locales — the English
+/// fallback in `one()`/`list_kind()` guarantees every variant resolves.
+fn sitemap_url_block(root: &str, suffix: &str) -> String {
+    const ALL: [&str; 5] = ["en", "it", "de", "fr", "pt"];
+    let mut out = String::new();
+    for lang in ALL {
+        let loc = format!("{root}{}{suffix}", i18n::prefix_for(lang));
+        out.push_str("<url><loc>");
+        out.push_str(&loc);
+        out.push_str("</loc>");
+        for alt in ALL {
+            out.push_str(&format!(
+                "<xhtml:link rel=\"alternate\" hreflang=\"{alt}\" href=\"{root}{}{suffix}\"/>",
+                i18n::prefix_for(alt)
+            ));
+        }
+        out.push_str(&format!(
+            "<xhtml:link rel=\"alternate\" hreflang=\"x-default\" href=\"{root}{suffix}\"/>"
+        ));
+        out.push_str("</url>");
+    }
+    out
+}
 async fn sitemap(
     db: web::Data<Database>,
     config: web::Data<Config>,
@@ -1962,19 +2227,13 @@ async fn sitemap(
         .try_collect()
         .await?;
     let root = config.public_url.trim_end_matches('/');
-    let mut urls = vec![
-        "/",
-        "/services",
-        "/work",
-        "/about",
-        "/tech-stack",
-        "/insights",
-        "/blog",
-        "/contact",
-    ]
-    .into_iter()
-    .map(|p| format!("<url><loc>{}{}</loc></url>", root, p))
-    .collect::<String>();
+    let mut urls = String::new();
+    urls.push_str(&sitemap_url_block(root, ""));
+    for suffix in ["/services", "/work", "/about", "/tech-stack", "/insights", "/blog"] {
+        urls.push_str(&sitemap_url_block(root, suffix));
+    }
+    urls.push_str(&format!("<url><loc>{root}/contact</loc></url>"));
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     for item in docs {
         let base = match item.kind.as_str() {
             "service" => "services",
@@ -1985,10 +2244,13 @@ async fn sitemap(
             "about" => "about",
             _ => continue,
         };
-        urls.push_str(&format!(
-            "<url><loc>{}/{}/{}</loc></url>",
-            root, base, item.slug
-        ));
+        if !seen.insert((item.kind.clone(), item.slug.clone())) {
+            continue;
+        }
+        urls.push_str(&sitemap_url_block(root, &format!("/{base}/{}", item.slug)));
     }
-    Ok(HttpResponse::Ok().content_type("application/xml; charset=utf-8").body(format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">{}</urlset>",urls)))
+    Ok(HttpResponse::Ok().content_type("application/xml; charset=utf-8").body(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">{}</urlset>",
+        urls
+    )))
 }
