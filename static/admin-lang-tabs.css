@@ -1,0 +1,6 @@
+.lang-tabs{display:flex;gap:.5rem;flex-wrap:wrap;margin:0 0 1rem}
+.lang-tab{border:1px solid #d8d0c0;background:#fff;border-radius:999px;padding:.35rem .9rem;font-size:.85rem;cursor:pointer}
+.lang-tab.active{background:#123c2b;color:#fff;border-color:#123c2b}
+.tab-dot{display:inline-block;width:.4rem;height:.4rem;border-radius:50%;background:#39a96b;margin-left:.35rem}
+.lang-panel[hidden]{display:none}
+.html-source{width:100%;font-family:ui-monospace,monospace;font-size:.85rem}

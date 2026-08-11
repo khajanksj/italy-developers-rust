@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{% if is_new %}Create content{% else %}Edit {{ shared.title }}{% endif %} · Italy Developers CMS</title><link rel="stylesheet" href="/static/admin.css"><script src="/static/admin.js" defer></script><style>.lang-tabs{display:flex;gap:.5rem;flex-wrap:wrap;margin:0 0 1rem}.lang-tab{border:1px solid #d8d0c0;background:#fff;border-radius:999px;padding:.35rem .9rem;font-size:.85rem;cursor:pointer}.lang-tab.active{background:#123c2b;color:#fff;border-color:#123c2b}.tab-dot{display:inline-block;width:.4rem;height:.4rem;border-radius:50%;background:#39a96b;margin-left:.35rem}.lang-panel[hidden]{display:none}.html-source{width:100%;font-family:ui-monospace,monospace;font-size:.85rem}</style></head><body class="editor-page"><header class="editor-topbar"><div><a href="/admin" class="back-button">←</a><div><p class="overline">CONTENT EDITOR</p><strong>{% if is_new %}New content{% else %}{{ shared.title }}{% endif %}</strong></div></div><div class="editor-status"><span data-save-state>All changes local</span><a href="/admin">Cancel</a><button form="content-form" class="save-button" type="submit">Save changes <span>⌘S</span></button></div></header><main class="editor-canvas"><form method="post" action="/admin/content/save" enctype="multipart/form-data" id="content-form" data-content-form novalidate>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{% if is_new %}Create content{% else %}Edit {{ shared.title }}{% endif %} · Italy Developers CMS</title><link rel="stylesheet" href="/static/admin.css"><link rel="stylesheet" href="/static/admin-lang-tabs.css"><script src="/static/admin.js" defer></script><script src="/static/admin-lang-tabs.js" defer></script></head><body class="editor-page"><header class="editor-topbar"><div><a href="/admin" class="back-button">←</a><div><p class="overline">CONTENT EDITOR</p><strong>{% if is_new %}New content{% else %}{{ shared.title }}{% endif %}</strong></div></div><div class="editor-status"><span data-save-state>All changes local</span><a href="/admin">Cancel</a><button form="content-form" class="save-button" type="submit">Save changes <span>⌘S</span></button></div></header><main class="editor-canvas"><form method="post" action="/admin/content/save" enctype="multipart/form-data" id="content-form" data-content-form novalidate>
 <input type="hidden" name="original_kind" value="{{ shared.kind }}">
 <input type="hidden" name="original_slug" value="{{ shared.slug }}">
 <input type="hidden" name="existing_image" value="{{ shared.image }}">
@@ -62,13 +62,4 @@
 </aside>
 </div>
 </form></main><div class="toast-stack" aria-live="polite"></div>
-<script>
-document.querySelectorAll('[data-lang-tab]').forEach(function(btn){
-  btn.addEventListener('click', function(){
-    document.querySelectorAll('[data-lang-tab]').forEach(function(b){ b.classList.remove('active'); });
-    btn.classList.add('active');
-    document.querySelectorAll('[data-lang-panel]').forEach(function(p){ p.hidden = p.getAttribute('data-lang-panel') !== btn.getAttribute('data-lang-tab'); });
-  });
-});
-</script>
 </body></html>
