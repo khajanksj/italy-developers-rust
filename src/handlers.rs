@@ -305,10 +305,42 @@ struct AdminDashboardTemplate {
     toast: String,
     hidden_by_limit: HashSet<String>,
 }
+#[derive(Clone)]
+struct LangTab {
+    code: &'static str,
+    label: &'static str,
+    item: ContentItem,
+}
+const LANG_TABS: [(&str, &str); 5] = [
+    ("en", "English"),
+    ("it", "Italiano"),
+    ("de", "Deutsch"),
+    ("fr", "Français"),
+    ("pt", "Português"),
+];
+/// Builds one tab per supported language, pulling in whichever sibling
+/// documents already exist (matched by `lang`) and leaving the rest empty.
+fn lang_tabs_from(existing: &[ContentItem]) -> Vec<LangTab> {
+    LANG_TABS
+        .iter()
+        .map(|&(code, label)| {
+            let item = existing
+                .iter()
+                .find(|e| e.lang == code)
+                .cloned()
+                .unwrap_or_else(|| ContentItem {
+                    lang: code.into(),
+                    ..ContentItem::default()
+                });
+            LangTab { code, label, item }
+        })
+        .collect()
+}
 #[derive(Template)]
 #[template(path = "admin/editor.html")]
 struct AdminEditorTemplate {
-    item: ContentItem,
+    shared: ContentItem,
+    langs: Vec<LangTab>,
     is_new: bool,
     errors: EditorErrors,
     can_publish: bool,
@@ -1725,7 +1757,8 @@ async fn admin_new(session: Session) -> Result<HttpResponse, AppError> {
         return Err(AppError::Forbidden);
     };
     html(AdminEditorTemplate {
-        item: ContentItem::default(),
+        shared: ContentItem::default(),
+        langs: lang_tabs_from(&[]),
         is_new: true,
         errors: EditorErrors::default(),
         can_publish: can_manage(&session),
@@ -1809,8 +1842,19 @@ async fn admin_edit(
         .find_one(doc! {"_id":oid})
         .await?
         .ok_or(AppError::NotFound)?;
+    let siblings: Vec<ContentItem> = content(&db)
+        .find(doc! {"kind":&item.kind,"slug":&item.slug})
+        .await?
+        .try_collect()
+        .await?;
+    let shared = siblings
+        .iter()
+        .find(|s| s.lang == "en")
+        .cloned()
+        .unwrap_or_else(|| item.clone());
     html(AdminEditorTemplate {
-        item,
+        shared,
+        langs: lang_tabs_from(&siblings),
         is_new: false,
         errors: EditorErrors::default(),
         can_publish: can_manage(&session),
@@ -1896,6 +1940,41 @@ fn slug_valid(value: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
+/// Reads the per-language fields for `code` (e.g. "it") out of the tabbed
+/// editor form, namespaced as `title_it`, `body_it`, etc.
+fn lang_item_from_form(f: &std::collections::HashMap<String, String>, code: &str, shared: &ContentItem) -> ContentItem {
+    // English keeps the original, unsuffixed field names so the existing
+    // rich editor / counters / slug-gen JS (keyed to fixed ids) keeps working
+    // unmodified; other languages use simpler `field_xx` namespaced inputs.
+    let suffix = if code == "en" { String::new() } else { format!("_{code}") };
+    let get = |field: &str| f.get(&format!("{field}{suffix}")).cloned().unwrap_or_default();
+    ContentItem {
+        id: None,
+        kind: shared.kind.clone(),
+        slug: shared.slug.clone(),
+        lang: code.into(),
+        title: get("title").trim().into(),
+        eyebrow: get("eyebrow"),
+        summary: get("summary").trim().into(),
+        glance: get("glance").trim().into(),
+        body: get("body"),
+        image: shared.image.clone(),
+        image_alt: get("image_alt"),
+        seo_title: get("seo_title").trim().into(),
+        seo_description: get("seo_description").trim().into(),
+        keywords: get("keywords"),
+        cta: get("cta"),
+        link: {
+            let v = get("link");
+            if v.trim().is_empty() { shared.link.clone() } else { v.trim().into() }
+        },
+        featured: shared.featured,
+        published: shared.published,
+        order: shared.order,
+        created_at: default_datetime(),
+        updated_at: default_datetime(),
+    }
+}
 async fn admin_save(
     session: Session,
     db: web::Data<Database>,
@@ -1907,11 +1986,13 @@ async fn admin_save(
     };
     let (f, uploaded) = multipart_data(payload, &config).await?;
     let now = DateTime::now();
-    let existing = f.get("id").and_then(|v| ObjectId::parse_str(v).ok());
-    let previous = if let Some(id) = existing {
-        content(&db).find_one(doc! {"_id":id}).await?
-    } else {
+    let original_kind = f.get("original_kind").cloned().unwrap_or_default();
+    let original_slug = f.get("original_slug").cloned().unwrap_or_default();
+    let is_new = original_slug.is_empty();
+    let existing_shared = if is_new {
         None
+    } else {
+        content(&db).find_one(doc! {"kind":&original_kind,"slug":&original_slug,"lang":"en"}).await?
     };
     let image = if uploaded.is_empty() {
         f.get("existing_image").cloned().unwrap_or_default()
@@ -1921,49 +2002,19 @@ async fn admin_save(
     let published = if can_manage(&session) {
         truthy(f.get("published"))
     } else {
-        previous.as_ref().map(|v| v.published).unwrap_or(false)
+        existing_shared.as_ref().map(|v| v.published).unwrap_or(false)
     };
-    let lang = f.get("lang").map(|v| i18n::normalize(v)).unwrap_or("en");
-    let mut item = ContentItem {
-        id: existing,
+    let mut shared = ContentItem {
         kind: f.get("kind").cloned().unwrap_or_default(),
-        slug: f
-            .get("slug")
-            .cloned()
-            .unwrap_or_default()
-            .trim()
-            .to_lowercase(),
-        lang: lang.into(),
-        title: f.get("title").cloned().unwrap_or_default().trim().into(),
-        eyebrow: f.get("eyebrow").cloned().unwrap_or_default(),
-        summary: f.get("summary").cloned().unwrap_or_default().trim().into(),
-        glance: f.get("glance").cloned().unwrap_or_default().trim().into(),
-        body: f.get("body").cloned().unwrap_or_default(),
+        slug: f.get("slug").cloned().unwrap_or_default().trim().to_lowercase(),
         image,
-        image_alt: f.get("image_alt").cloned().unwrap_or_default(),
-        seo_title: f
-            .get("seo_title")
-            .cloned()
-            .unwrap_or_default()
-            .trim()
-            .into(),
-        seo_description: f
-            .get("seo_description")
-            .cloned()
-            .unwrap_or_default()
-            .trim()
-            .into(),
-        keywords: f.get("keywords").cloned().unwrap_or_default(),
-        cta: f.get("cta").cloned().unwrap_or_default(),
-        link: f.get("link").cloned().unwrap_or_default().trim().into(),
         featured: truthy(f.get("featured")),
         published,
         order: f.get("order").and_then(|v| v.parse().ok()).unwrap_or(0),
-        created_at: previous.as_ref().map(|v| v.created_at).unwrap_or(now),
-        updated_at: now,
+        ..ContentItem::default()
     };
-    if item.image.is_empty() {
-        item.image = match item.kind.as_str() {
+    if shared.image.is_empty() {
+        shared.image = match shared.kind.as_str() {
             "blog" | "insight" => "/static/images/generated/blog-website-scope.webp",
             "tech" => "/static/images/generated/tech-python.webp",
             "work" | "testimonial" => "/static/images/generated/work-doappointment.webp",
@@ -1971,83 +2022,94 @@ async fn admin_save(
             _ => "/static/images/small-business-websites.png",
         }.into();
     }
-    if item.image_alt.trim().is_empty() {
-        item.image_alt = format!("Editorial image for {}", item.title);
-    }
+
     let mut errors = EditorErrors::default();
-    if ![
-        "service",
-        "work",
-        "tech",
-        "about",
-        "insight",
-        "blog",
-        "testimonial",
-    ]
-        .contains(&item.kind.as_str())
-    {
+    if !["service", "work", "tech", "about", "insight", "blog", "testimonial"].contains(&shared.kind.as_str()) {
         errors.form = "Choose a valid website content type.".into()
     }
-    if item.title.len() < 3 || item.title.len() > 140 {
-        errors.title = "Use 3–140 characters.".into()
-    }
-    if !slug_valid(&item.slug) {
+    if !slug_valid(&shared.slug) {
         errors.slug = "Use lowercase letters, numbers and single hyphens only.".into()
-    } else {
-        let mut filter = doc! {"slug":&item.slug,"kind":&item.kind,"lang":&item.lang};
-        if let Some(id) = existing {
-            filter.insert("_id", doc! {"$ne":id});
-        }
-        if content(&db).count_documents(filter).await? > 0 {
-            errors.slug = "This URL slug is already in use for this content type and language.".into()
-        }
-    }
-    if item.summary.len() < 20 || item.summary.len() > 400 {
-        errors.summary = "Write a useful summary between 20 and 400 characters.".into()
-    }
-    if item.kind != "testimonial" && item.body.trim().len() < 20 {
-        errors.body = "Main content must contain at least 20 characters.".into()
-    }
-    if item.kind != "testimonial" && (item.seo_title.len() < 20 || item.seo_title.len() > 70) {
-        errors.seo_title = "SEO title should be 20–70 characters.".into()
-    }
-    if item.kind != "testimonial"
-        && (item.seo_description.len() < 70 || item.seo_description.len() > 160)
+    } else if is_new
+        && content(&db).count_documents(doc! {"kind":&shared.kind,"slug":&shared.slug}).await? > 0
     {
-        errors.seo_description = "SEO description should be 70–160 characters.".into()
+        errors.slug = "This URL slug is already in use for this content type.".into()
     }
-    if !item.image.is_empty() && item.image_alt.trim().len() < 5 {
-        errors.image = "Add descriptive alt text for the uploaded image.".into()
+
+    let mut submitted: Vec<ContentItem> = Vec::new();
+    let mut lang_errors: Vec<String> = Vec::new();
+    for (code, label) in LANG_TABS {
+        let item = lang_item_from_form(&f, code, &shared);
+        if item.title.trim().is_empty() {
+            continue;
+        }
+        let mut msgs = Vec::new();
+        if item.title.len() < 3 || item.title.len() > 140 {
+            msgs.push("title must be 3-140 characters");
+        }
+        if item.summary.len() < 20 || item.summary.len() > 400 {
+            msgs.push("summary must be 20-400 characters");
+        }
+        if shared.kind != "testimonial" && item.body.trim().len() < 20 {
+            msgs.push("main content must be at least 20 characters");
+        }
+        if shared.kind != "testimonial" && (item.seo_title.len() < 20 || item.seo_title.len() > 70) {
+            msgs.push("SEO title should be 20-70 characters");
+        }
+        if shared.kind != "testimonial" && (item.seo_description.len() < 70 || item.seo_description.len() > 160) {
+            msgs.push("meta description should be 70-160 characters");
+        }
+        if code == "en" {
+            if msgs.iter().any(|m| m.starts_with("title")) { errors.title = "Use 3-140 characters.".into(); }
+            if msgs.iter().any(|m| m.starts_with("summary")) { errors.summary = "Write a useful summary between 20 and 400 characters.".into(); }
+            if msgs.iter().any(|m| m.starts_with("main")) { errors.body = "Main content must contain at least 20 characters.".into(); }
+            if msgs.iter().any(|m| m.starts_with("SEO title")) { errors.seo_title = "SEO title should be 20-70 characters.".into(); }
+            if msgs.iter().any(|m| m.starts_with("meta")) { errors.seo_description = "SEO description should be 70-160 characters.".into(); }
+        }
+        if !msgs.is_empty() {
+            lang_errors.push(format!("{label}: {}.", msgs.join(", ")));
+        }
+        submitted.push(item);
     }
-    let has_errors = [
-        &errors.title,
-        &errors.slug,
-        &errors.summary,
-        &errors.body,
-        &errors.seo_title,
-        &errors.seo_description,
-        &errors.image,
-        &errors.form,
-    ]
-    .iter()
-    .any(|v| !v.is_empty());
+    if !lang_errors.is_empty() {
+        let combined = lang_errors.join(" ");
+        errors.form = if errors.form.is_empty() { combined } else { format!("{} {combined}", errors.form) };
+    }
+    if submitted.is_empty() && errors.form.is_empty() {
+        errors.form = "Fill in at least one language tab, starting with English.".into();
+    }
+
+    let has_errors = [&errors.title, &errors.slug, &errors.summary, &errors.body, &errors.seo_title, &errors.seo_description, &errors.image, &errors.form]
+        .iter()
+        .any(|v| !v.is_empty());
     if has_errors {
+        let langs = LANG_TABS
+            .iter()
+            .map(|&(code, label)| {
+                let item = submitted.iter().find(|s| s.lang == code).cloned().unwrap_or_else(|| ContentItem { lang: code.into(), ..ContentItem::default() });
+                LangTab { code, label, item }
+            })
+            .collect();
         return Ok(HttpResponse::UnprocessableEntity()
             .content_type("text/html; charset=utf-8")
-            .body(
-                AdminEditorTemplate {
-                    item,
-                    is_new: existing.is_none(),
-                    errors,
-                    can_publish: can_manage(&session),
-                }
-                .render()?,
-            ));
+            .body(AdminEditorTemplate { shared, langs, is_new, errors, can_publish: can_manage(&session) }.render()?));
     }
-    if let Some(id) = existing {
-        content(&db).replace_one(doc! {"_id":id}, item).await?;
-    } else {
-        content(&db).insert_one(item).await?;
+
+    if !is_new && (original_kind != shared.kind || original_slug != shared.slug) {
+        content(&db).delete_many(doc! {"kind":&original_kind,"slug":&original_slug}).await?;
+    }
+    for mut item in submitted {
+        let prior = content(&db).find_one(doc! {"kind":&shared.kind,"slug":&shared.slug,"lang":&item.lang}).await?;
+        item.image_alt = if item.image_alt.trim().is_empty() {
+            format!("Editorial image for {}", item.title)
+        } else {
+            item.image_alt
+        };
+        item.created_at = prior.as_ref().map(|p| p.created_at).unwrap_or(now);
+        item.updated_at = now;
+        content(&db)
+            .replace_one(doc! {"kind":&shared.kind,"slug":&shared.slug,"lang":&item.lang}, item)
+            .upsert(true)
+            .await?;
     }
     Ok(HttpResponse::SeeOther()
         .insert_header((header::LOCATION, "/admin?toast=saved"))
