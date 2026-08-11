@@ -30,7 +30,7 @@ deploy:
   script:
     - install -m 755 target/release/italy-developers-rust /srv/italydev/italy-developers-rust.new
     - mv /srv/italydev/italy-developers-rust.new /srv/italydev/italy-developers-rust
-    - rsync -a --delete --chmod=D2775,F664 static/ /srv/italydev/static/
+    - rsync -a --delete static/ /srv/italydev/static/
     - sudo /bin/systemctl restart italydev-web
     - sleep 2
     - curl -fsS http://127.0.0.1:8081/health/live
