@@ -374,7 +374,13 @@ fn html<T: Template>(template: T) -> Result<HttpResponse, AppError> {
         .replace("http://localhost:8080", public_url.trim_end_matches('/'));
     Ok(HttpResponse::Ok()
         .content_type("text/html; charset=utf-8")
-        .insert_header((header::CACHE_CONTROL, "no-cache"))
+        // Every page here can render differently per visitor (lang cookie,
+        // detected country, session/auth state) — `no-cache` still permits
+        // a shared proxy to store and revalidate, which risks one visitor's
+        // locale/session leaking into another's response. `no-store` and
+        // `private` rule that out entirely.
+        .insert_header((header::CACHE_CONTROL, "private, no-store, must-revalidate"))
+        .insert_header((header::VARY, "Cookie, Accept-Language"))
         .body(rendered))
 }
 fn content(db: &Database) -> mongodb::Collection<ContentItem> {

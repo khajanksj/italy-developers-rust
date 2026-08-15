@@ -7,16 +7,16 @@
 {% block head %}<link rel="stylesheet" href="/static/content.css">{% endblock %}
 {% block content %}
 <section class="page-hero">
-  <p class="eyebrow"><span>{{ eyebrow }}</span><span>For Italian small businesses</span></p>
+  <p class="eyebrow"><span>{{ eyebrow }}</span><span>{{ t.for_small_businesses }}</span></p>
   <h1>{{ heading }}</h1>
   <p>{{ intro }}</p>
 </section>
 
 {% if kind == "about" %}
 <section class="about-db-intro">
-  <p class="kicker">Content managed from your admin</p>
-  <h2>Our story, approach and values.</h2>
-  <p>Every section below is a separate About entry. Edit its title, summary, image and main content from the Content Library.</p>
+  <p class="kicker">{{ t.about_db_kicker }}</p>
+  <h2>{{ t.about_db_h2 }}</h2>
+  <p>{{ t.about_db_p }}</p>
 </section>
 <section class="about-db-sections">
   {% for item in items %}
@@ -25,7 +25,7 @@
       <p class="kicker">{{ item.eyebrow }}</p>
       <h2>{{ item.title }}</h2>
       <p>{{ item.summary }}</p>
-      <a class="text-link" href="{{ prefix }}/about/{{ item.slug }}">Open dedicated page →</a>
+      <a class="text-link" href="{{ prefix }}/about/{{ item.slug }}">{{ t.open_dedicated_page }}</a>
     </div>
     <div>
       {% if !item.image.is_empty() %}<img src="{{ item.image }}" alt="{{ item.image_alt }}">{% endif %}
@@ -36,8 +36,8 @@
 </section>
 {% else %}
 <section class="collection-intro">
-  <p class="kicker">Clear scope · useful content · lasting value</p>
-  <p>Choose an entry below to read its complete main content. Titles, summaries, images and detail pages are managed from the admin area.</p>
+  <p class="kicker">{{ t.collection_intro_kicker }}</p>
+  <p>{{ t.collection_intro_p }}</p>
 </section>
 <section class="media-grid collection-grid">
   {% for item in items %}
@@ -51,7 +51,7 @@
       <p class="kicker">{{ item.eyebrow }}</p>
       <h2>{{ item.title }}</h2>
       <p>{{ item.summary }}</p>
-      <span class="text-link">Open full content →</span>
+      <span class="text-link">{{ t.open_full_content }}</span>
     </a>
   </article>
   {% endfor %}
@@ -59,16 +59,16 @@
 {% endif %}
 
 <section class="process">
-  <p class="kicker">A low-risk way to start</p>
+  <p class="kicker">{{ t.process_kicker }}</p>
   <div>
-    <article><span>01</span><h3>Share the goal</h3><p>Tell us what customers need to do and the budget range you need us to respect.</p></article>
-    <article><span>02</span><h3>Choose the useful core</h3><p>We identify a focused first release and show optional improvements separately.</p></article>
-    <article><span>03</span><h3>Launch and learn</h3><p>Measure real use, then invest in the changes with the strongest evidence.</p></article>
+    <article><span>01</span><h3>{{ t.process_1_h }}</h3><p>{{ t.process_1_p }}</p></article>
+    <article><span>02</span><h3>{{ t.process_2_h }}</h3><p>{{ t.process_2_p }}</p></article>
+    <article><span>03</span><h3>{{ t.process_3_h }}</h3><p>{{ t.process_3_p }}</p></article>
   </div>
 </section>
 <section class="page-cta">
   <p class="kicker">{{ t.page_cta_kicker }}</p>
   <h2>{{ t.page_cta_heading }}</h2>
-  <a class="button" href="/contact">{{ t.page_cta_button }} <span>↗</span></a>
+  <a class="button" href="{{ prefix }}/contact">{{ t.page_cta_button }} <span>↗</span></a>
 </section>
 {% endblock %}
