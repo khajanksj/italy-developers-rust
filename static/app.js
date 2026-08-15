@@ -47,13 +47,36 @@
     const currentPath = location.pathname.replace(/\/$/, "") || "/";
     document.querySelectorAll("#nav a").forEach((link) => {
       const linkPath = new URL(link.href).pathname.replace(/\/$/, "") || "/";
-      const active = linkPath === "/" ? currentPath === "/" : currentPath === linkPath || currentPath.startsWith(`${linkPath}/`);
+      // A locale-prefixed home link (e.g. "/it") must only match exactly —
+      // otherwise it's a prefix of every other page under that locale
+      // ("/it/services".startsWith("/it")), lighting up Home alongside
+      // whatever section is actually current.
+      const isHomeLink = /^\/(it|de|fr|pt)?$/.test(linkPath);
+      const active = isHomeLink ? currentPath === linkPath : currentPath === linkPath || currentPath.startsWith(`${linkPath}/`);
       link.classList.toggle("active", active);
       if (active) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
     });
   };
+  const syncLangSelect = () => {
+    const select = document.querySelector("[data-lang-select]");
+    if (!select) return;
+    const localeMatch = location.pathname.match(/^\/(it|de|fr|pt)(?=\/|$)/);
+    const current = localeMatch ? localeMatch[1] : "en";
+    const stripped = localeMatch ? location.pathname.slice(localeMatch[0].length) || "/" : location.pathname;
+    select.querySelectorAll("option").forEach((option) => {
+      const code = option.dataset.lang;
+      option.value = code === "en" ? stripped : `/${code}${stripped}`;
+      option.selected = code === current;
+    });
+  };
   syncActiveNavigation();
+  syncLangSelect();
+  // A full navigation, not the soft-navigate() below: switching language
+  // changes every nav/footer link's prefix, and those live in the header
+  // outside the #page swap target, so they'd otherwise stay stale (still
+  // pointing at the old locale) until a real page load re-renders them.
+  document.querySelector("[data-lang-select]")?.addEventListener("change", (event) => { location.href = event.target.value; });
   menu?.addEventListener("click", () => {
     const open = menu.getAttribute("aria-expanded") !== "true";
     menu.setAttribute("aria-expanded", String(open));
@@ -80,6 +103,7 @@
         document.querySelector('meta[name="description"]')?.setAttribute("content", doc.querySelector('meta[name="description"]')?.content || "");
         if (push) history.pushState({}, "", url);
         syncActiveNavigation();
+        syncLangSelect();
         scrollTo({ top: 0, behavior: "instant" });
         next.focus({ preventScroll: true });
       };
