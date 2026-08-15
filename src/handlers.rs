@@ -16,6 +16,7 @@ use validator::Validate;
 use crate::{
     config::Config,
     error::AppError,
+    geoip,
     i18n::{self, Ui},
     security,
 };
@@ -139,6 +140,7 @@ struct CommentView {
     body: String,
     likes: i64,
     depth: usize,
+    avatar: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -161,6 +163,17 @@ struct AdminUser {
     role: String,
     active: bool,
     created_at: DateTime,
+    /// Best-effort ISO country code detected at registration time (IP-based;
+    /// empty when undetected or for CLI-seeded admin/staff accounts).
+    #[serde(default)]
+    country: String,
+    /// Locale inferred from `country` at registration time — informational,
+    /// not used to override the visitor's own `lang` cookie choice.
+    #[serde(default)]
+    native_language: String,
+    /// `/uploads/<file>` path, or empty for no profile photo.
+    #[serde(default)]
+    avatar: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -300,6 +313,7 @@ struct AdminDashboardTemplate {
     items: Vec<ContentItem>,
     leads: Vec<Lead>,
     actor_email: String,
+    actor_avatar: String,
     role: String,
     can_delete: bool,
     toast: String,
@@ -426,6 +440,9 @@ pub async fn user_command(db: &Database, args: &[String]) -> anyhow::Result<()> 
         role: role.into(),
         active: true,
         created_at: DateTime::now(),
+        country: String::new(),
+        native_language: String::new(),
+        avatar: String::new(),
     };
     users(db)
         .replace_one(doc! {"email":&email}, user)
@@ -490,6 +507,7 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
         .route("/admin/content/new", web::get().to(admin_new))
         .route("/admin/content/{id}/edit", web::get().to(admin_edit))
         .route("/admin/content/save", web::post().to(admin_save))
+        .route("/admin/media/upload", web::post().to(admin_media_upload))
         .route("/admin/content/{id}/delete", web::post().to(admin_delete))
         .route("/admin/content/{id}/toggle/{field}", web::post().to(admin_toggle))
         .route("/admin/homepage", web::get().to(admin_homepage))
@@ -1415,10 +1433,24 @@ async fn home_page(db: &Database, lang: &str) -> Result<HttpResponse, AppError> 
 }
 
 /// For unprefixed pages (contact/login/register) that still show localized
-/// chrome based on the visitor's last-chosen language, if any.
-fn lang_from_cookie(req: &HttpRequest) -> &'static str {
-    req.cookie("lang")
-        .map(|c| i18n::normalize(c.value()))
+/// chrome. Precedence: the visitor's own past choice (`lang` cookie) beats
+/// everything; otherwise we infer from IP-based country detection
+/// (Cloudflare's `CF-IPCountry` header, or a local MaxMind lookup —
+/// `geoip::country_for`), then `Accept-Language`, then English.
+fn detect_lang(req: &HttpRequest, geo: &geoip::GeoState) -> &'static str {
+    if let Some(c) = req.cookie("lang") {
+        return i18n::normalize(c.value());
+    }
+    if let Some(lang) = geoip::country_for(req, geo)
+        .as_deref()
+        .and_then(geoip::locale_for_country)
+    {
+        return lang;
+    }
+    req.headers()
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(i18n::best_supported_from_accept_language)
         .unwrap_or("en")
 }
 fn lang_cookie(lang: &str) -> actix_web::cookie::Cookie<'static> {
@@ -1428,18 +1460,25 @@ fn lang_cookie(lang: &str) -> actix_web::cookie::Cookie<'static> {
         .finish()
 }
 
-/// `/` — detects a language from the `lang` cookie or `Accept-Language`
-/// header and 302s to `/{lang}/`; otherwise serves English directly. Deep
-/// links to interior pages never force-redirect like this.
-async fn root(req: HttpRequest, db: web::Data<Database>) -> Result<HttpResponse, AppError> {
+/// `/` — decides whether to 302 to a locale-prefixed `/{lang}/` using the
+/// same cookie > geo(IP country) > Accept-Language precedence as
+/// `detect_lang`, except an explicit cookie that isn't it/de/fr/pt (e.g. the
+/// visitor already chose English) short-circuits without a redirect, and a
+/// resolved "en" never redirects since `/en/` isn't a route — home is served
+/// unprefixed. Deep links to interior pages never force-redirect like this.
+async fn root(req: HttpRequest, db: web::Data<Database>, geo: web::Data<geoip::GeoState>) -> Result<HttpResponse, AppError> {
     let redirect_lang: Option<&'static str> = match req.cookie("lang") {
         Some(c) if i18n::is_supported_locale(c.value()) => Some(i18n::normalize(c.value())),
         Some(_) => None,
-        None => req
-            .headers()
-            .get(header::ACCEPT_LANGUAGE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(i18n::best_supported_from_accept_language),
+        None => geoip::country_for(&req, &geo)
+            .as_deref()
+            .and_then(geoip::locale_for_country)
+            .or_else(|| {
+                req.headers()
+                    .get(header::ACCEPT_LANGUAGE)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(i18n::best_supported_from_accept_language)
+            }),
     };
     if let Some(lang) = redirect_lang {
         return Ok(HttpResponse::Found()
@@ -1605,16 +1644,37 @@ async fn comment_views(db: &Database, slug: &str) -> Result<Vec<CommentView>, Ap
         .await?
         .try_collect()
         .await?;
-    fn append(parent: Option<ObjectId>, depth: usize, rows: &[BlogComment], out: &mut Vec<CommentView>) {
+    // Batch-fetch avatars by user_id (the synthetic "system:italy-developers"
+    // starter comment and any legacy comment without a real ObjectId just
+    // won't match, so they fall back to the initials avatar in the template).
+    let author_ids: Vec<ObjectId> = rows
+        .iter()
+        .filter_map(|row| ObjectId::parse_str(&row.user_id).ok())
+        .collect();
+    let avatars: std::collections::HashMap<ObjectId, String> = if author_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        users(db)
+            .find(doc! {"_id":{"$in":&author_ids}})
+            .await?
+            .try_collect::<Vec<AdminUser>>()
+            .await?
+            .into_iter()
+            .filter_map(|user| user.id.map(|id| (id, user.avatar)))
+            .filter(|(_, avatar)| !avatar.is_empty())
+            .collect()
+    };
+    fn append(parent: Option<ObjectId>, depth: usize, rows: &[BlogComment], avatars: &std::collections::HashMap<ObjectId, String>, out: &mut Vec<CommentView>) {
         if depth > 6 { return; }
         for row in rows.iter().filter(|row| row.parent_id == parent) {
             let Some(id) = row.id else { continue };
-            out.push(CommentView { id:id.to_hex(), author:row.author.clone(), body:row.body.clone(), likes:row.likes, depth });
-            append(Some(id), depth + 1, rows, out);
+            let avatar = ObjectId::parse_str(&row.user_id).ok().and_then(|uid| avatars.get(&uid)).cloned();
+            out.push(CommentView { id:id.to_hex(), author:row.author.clone(), body:row.body.clone(), likes:row.likes, depth, avatar });
+            append(Some(id), depth + 1, rows, avatars, out);
         }
     }
     let mut result = Vec::new();
-    append(None, 0, &rows, &mut result);
+    append(None, 0, &rows, &avatars, &mut result);
     Ok(result)
 }
 
@@ -1730,8 +1790,8 @@ fn csrf(session: &Session) -> Result<String, AppError> {
         .map_err(|_| AppError::BadRequest)?;
     Ok(token)
 }
-async fn contact_page(req: HttpRequest, session: Session) -> Result<HttpResponse, AppError> {
-    let lang = lang_from_cookie(&req);
+async fn contact_page(req: HttpRequest, session: Session, geo: web::Data<geoip::GeoState>) -> Result<HttpResponse, AppError> {
+    let lang = detect_lang(&req, &geo);
     html(ContactTemplate {
         csrf: csrf(&session)?,
         success: false,
@@ -1761,6 +1821,7 @@ async fn submit_contact(
     req: HttpRequest,
     session: Session,
     db: web::Data<Database>,
+    geo: web::Data<geoip::GeoState>,
     form: web::Form<ContactForm>,
 ) -> Result<HttpResponse, AppError> {
     form.validate().map_err(|_| AppError::BadRequest)?;
@@ -1784,7 +1845,7 @@ async fn submit_contact(
         })
         .await?;
     session.remove("csrf");
-    let lang = lang_from_cookie(&req);
+    let lang = detect_lang(&req, &geo);
     html(ContactTemplate {
         csrf: String::new(),
         success: true,
@@ -1894,29 +1955,26 @@ struct MemberAuthQuery { next: Option<String> }
 #[derive(Deserialize)]
 struct MemberLoginForm { email: String, password: String, next: String, csrf: String }
 
-#[derive(Deserialize)]
-struct MemberRegisterForm { name: String, email: String, password: String, next: String, csrf: String }
-
 fn safe_next(value: &str) -> String {
     if value.starts_with('/') && !value.starts_with("//") { value.into() } else { "/".into() }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn member_auth_template(req: &HttpRequest, register: bool, next: String, error: String, csrf: String) -> MemberAuthTemplate {
-    let lang = lang_from_cookie(req);
+fn member_auth_template(req: &HttpRequest, geo: &geoip::GeoState, register: bool, next: String, error: String, csrf: String) -> MemberAuthTemplate {
+    let lang = detect_lang(req, geo);
     let path = if register { "/register" } else { "/login" };
     MemberAuthTemplate { register, next, error, csrf, lang: lang.into(), prefix: String::new(), path_no_prefix: path.into(), t: i18n::ui(lang) }
 }
 
-async fn member_login(req: HttpRequest, session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
-    html(member_auth_template(&req, false, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
+async fn member_login(req: HttpRequest, session: Session, geo: web::Data<geoip::GeoState>, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    html(member_auth_template(&req, &geo, false, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
 }
 
-async fn member_register(req: HttpRequest, session: Session, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
-    html(member_auth_template(&req, true, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
+async fn member_register(req: HttpRequest, session: Session, geo: web::Data<geoip::GeoState>, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    html(member_auth_template(&req, &geo, true, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
 }
 
-async fn member_auth(req: HttpRequest, session: Session, db: web::Data<Database>, form: web::Form<MemberLoginForm>) -> Result<HttpResponse, AppError> {
+async fn member_auth(req: HttpRequest, session: Session, db: web::Data<Database>, geo: web::Data<geoip::GeoState>, form: web::Form<MemberLoginForm>) -> Result<HttpResponse, AppError> {
     valid_csrf(&session, &form.csrf)?;
     let email = form.email.trim().to_lowercase();
     if let Some(user) = users(&db).find_one(doc! {"email":&email,"active":true}).await? {
@@ -1929,26 +1987,37 @@ async fn member_auth(req: HttpRequest, session: Session, db: web::Data<Database>
             return Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, safe_next(&form.next))).finish());
         }
     }
-    Ok(HttpResponse::Unauthorized().content_type("text/html; charset=utf-8").body(member_auth_template(&req, false, safe_next(&form.next), "Email or password is incorrect.".into(), csrf(&session)?).render()?))
+    Ok(HttpResponse::Unauthorized().content_type("text/html; charset=utf-8").body(member_auth_template(&req, &geo, false, safe_next(&form.next), "Email or password is incorrect.".into(), csrf(&session)?).render()?))
 }
 
-async fn member_create(req: HttpRequest, session: Session, db: web::Data<Database>, form: web::Form<MemberRegisterForm>) -> Result<HttpResponse, AppError> {
-    valid_csrf(&session, &form.csrf)?;
-    let name = form.name.trim();
-    let email = form.email.trim().to_lowercase();
-    if !(2..=80).contains(&name.chars().count()) || !email.contains('@') || email.len() > 254 || form.password.len() < 12 {
-        return Ok(HttpResponse::UnprocessableEntity().content_type("text/html; charset=utf-8").body(member_auth_template(&req, true, safe_next(&form.next), "Use your real name, a valid email and a password of at least 12 characters.".into(), csrf(&session)?).render()?));
+/// Registration accepts `multipart/form-data` (not a typed `web::Form`) so
+/// members can optionally attach a profile photo alongside name/email/
+/// password, reusing the same `multipart_data` upload/validation helper as
+/// the admin content editor's image field.
+async fn member_create(req: HttpRequest, session: Session, db: web::Data<Database>, config: web::Data<Config>, geo: web::Data<geoip::GeoState>, payload: Multipart) -> Result<HttpResponse, AppError> {
+    let (f, avatar) = multipart_data(payload, &config).await?;
+    let get = |field: &str| f.get(field).cloned().unwrap_or_default();
+    let csrf_token = get("csrf");
+    valid_csrf(&session, &csrf_token)?;
+    let next = get("next");
+    let name = get("name").trim().to_string();
+    let email = get("email").trim().to_lowercase();
+    let password = get("password");
+    if !(2..=80).contains(&name.chars().count()) || !email.contains('@') || email.len() > 254 || password.len() < 12 {
+        return Ok(HttpResponse::UnprocessableEntity().content_type("text/html; charset=utf-8").body(member_auth_template(&req, &geo, true, safe_next(&next), "Use your real name, a valid email and a password of at least 12 characters.".into(), csrf(&session)?).render()?));
     }
     if users(&db).count_documents(doc! {"email":&email}).await? > 0 {
-        return Ok(HttpResponse::Conflict().content_type("text/html; charset=utf-8").body(member_auth_template(&req, true, safe_next(&form.next), "An account already exists for this email.".into(), csrf(&session)?).render()?));
+        return Ok(HttpResponse::Conflict().content_type("text/html; charset=utf-8").body(member_auth_template(&req, &geo, true, safe_next(&next), "An account already exists for this email.".into(), csrf(&session)?).render()?));
     }
-    let inserted = users(&db).insert_one(AdminUser { id:None, name:name.into(), email:email.clone(), password_hash:bcrypt::hash(&form.password, bcrypt::DEFAULT_COST).map_err(|_| AppError::BadRequest)?, role:"member".into(), active:true, created_at:DateTime::now() }).await?;
+    let country = geoip::country_for(&req, &geo).unwrap_or_default();
+    let native_language = geoip::locale_for_country(&country).unwrap_or_default().to_string();
+    let inserted = users(&db).insert_one(AdminUser { id:None, name:name.clone(), email:email.clone(), password_hash:bcrypt::hash(&password, bcrypt::DEFAULT_COST).map_err(|_| AppError::BadRequest)?, role:"member".into(), active:true, created_at:DateTime::now(), country, native_language, avatar }).await?;
     session.renew();
     session.insert("user_id", inserted.inserted_id.as_object_id().map(|id| id.to_hex()).unwrap_or_default()).map_err(|_| AppError::BadRequest)?;
     session.insert("email", email).map_err(|_| AppError::BadRequest)?;
     session.insert("name", name).map_err(|_| AppError::BadRequest)?;
     session.insert("role", "member").map_err(|_| AppError::BadRequest)?;
-    Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, safe_next(&form.next))).finish())
+    Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, safe_next(&next))).finish())
 }
 
 async fn member_logout(session: Session) -> HttpResponse { session.purge(); HttpResponse::SeeOther().insert_header((header::LOCATION, "/")).finish() }
@@ -2001,14 +2070,17 @@ async fn admin_dashboard(
     };
     let home_settings_current = home_settings(&db).await?;
     let hidden_by_limit = hidden_by_home_limit(&db, &home_settings_current).await?;
+    let actor_email: String = session.get::<String>("email").ok().flatten().unwrap_or_default();
+    let actor_avatar = users(&db)
+        .find_one(doc! {"email":&actor_email})
+        .await?
+        .map(|user| user.avatar)
+        .unwrap_or_default();
     html(AdminDashboardTemplate {
         items,
         leads: enquiries,
-        actor_email: session
-            .get::<String>("email")
-            .ok()
-            .flatten()
-            .unwrap_or_default(),
+        actor_email,
+        actor_avatar,
         role: role(&session),
         can_delete: can_manage(&session),
         toast: query.toast.clone().unwrap_or_default(),
@@ -2238,6 +2310,24 @@ fn lang_item_from_form(f: &std::collections::HashMap<String, String>, code: &str
         updated_at: default_datetime(),
     }
 }
+/// Backs the rich-text editor's "Image" toolbar button (`static/admin.js`):
+/// uploads one image and hands back its `/uploads/...` URL to insert inline
+/// into blog/article body HTML, reusing the same validated upload pipeline
+/// as the content editor's featured-image field and member avatars.
+async fn admin_media_upload(
+    session: Session,
+    config: web::Data<Config>,
+    payload: Multipart,
+) -> Result<HttpResponse, AppError> {
+    if !can_edit(&session) {
+        return Err(AppError::Forbidden);
+    }
+    let (_, uploaded) = multipart_data(payload, &config).await?;
+    if uploaded.is_empty() {
+        return Err(AppError::BadRequest);
+    }
+    Ok(HttpResponse::Ok().json(serde_json::json!({ "url": uploaded })))
+}
 async fn admin_save(
     session: Session,
     db: web::Data<Database>,
@@ -2429,7 +2519,7 @@ async fn admin_toggle(
 fn table_switch(id: &str, field: &str, checked: bool, can_manage: bool) -> String {
     let disabled = field == "published" && !can_manage;
     format!(
-        r##"<label class="table-switch" id="switch-{field}-{id}"><input type="checkbox" hx-post="/admin/content/{id}/toggle/{field}" hx-target="#switch-{field}-{id}" hx-swap="outerHTML"{checked}{disabled}><i></i></label>"##,
+        r##"<label class="table-switch" id="switch-{field}-{id}"><input type="checkbox" hx-post="/admin/content/{id}/toggle/{field}" hx-target="#switch-{field}-{id}" hx-swap="outerHTML" hx-indicator="closest .table-switch"{checked}{disabled}><i></i></label>"##,
         field = field,
         id = id,
         checked = if checked { " checked" } else { "" },

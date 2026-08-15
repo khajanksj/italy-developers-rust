@@ -50,6 +50,8 @@ Use `docker compose down -v` only when you intentionally want to erase MongoDB c
 
 Configure `MONGODB_URL`, `MONGODB_DATABASE`, `APP_SECRET_KEY`, `PUBLIC_URL`, `COOKIE_SECURE=true`, `HOST`, `PORT`, `WEB_WORKERS`, `UPLOAD_DIR` and `RUST_LOG`.
 
+Locale is detected in this order: the visitor's own `lang` cookie (once set) beats everything; otherwise Cloudflare's `CF-IPCountry`/`CF-Connecting-IP` headers (free, zero setup, used automatically when the site is proxied through Cloudflare); otherwise a local MaxMind GeoLite2-Country database if `GEOIP_DB_PATH` points to one (get a free license key at maxmind.com); otherwise the browser's `Accept-Language` header; otherwise English.
+
 Use TLS, a strong database user/password, encrypted backups, restricted network access, object storage or a persistent upload volume, secret rotation, monitoring and regular dependency updates.
 
 ## Production deployment

@@ -1,5 +1,6 @@
 mod config;
 mod error;
+mod geoip;
 mod handlers;
 mod i18n;
 mod security;
@@ -25,6 +26,7 @@ async fn main() -> io::Result<()> {
     let args=std::env::args().collect::<Vec<_>>();
     if args.len()>1 { handlers::user_command(&database,&args[1..]).await.map_err(io::Error::other)?; return Ok(()) }
     std::fs::create_dir_all(&config.upload_dir)?;
+    let geo = web::Data::new(geoip::load(config.geoip_db_path.as_deref()));
     let limiter = GovernorConfigBuilder::default().seconds_per_request(1).burst_size(100).finish().expect("valid governor config");
     let bind = (config.host.clone(), config.port);
     let workers = config.workers;
@@ -35,6 +37,7 @@ async fn main() -> io::Result<()> {
         App::new()
             .app_data(web::Data::new(database.clone()))
             .app_data(web::Data::new(config.clone()))
+            .app_data(geo.clone())
             .app_data(web::JsonConfig::default().limit(32 * 1024).error_handler(error::json_error))
             .app_data(web::FormConfig::default().limit(32 * 1024).error_handler(error::form_error))
             .wrap(TracingLogger::default())

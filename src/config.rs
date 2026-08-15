@@ -1,7 +1,7 @@
 use secrecy::{ExposeSecret, SecretString};
 
 #[derive(Clone)]
-pub struct Config { pub host:String, pub port:u16, pub mongodb_url:String, pub mongodb_database:String, pub cookie_key:[u8;64], pub cookie_secure:bool, pub workers:usize, pub public_url:String, pub upload_dir:String }
+pub struct Config { pub host:String, pub port:u16, pub mongodb_url:String, pub mongodb_database:String, pub cookie_key:[u8;64], pub cookie_secure:bool, pub workers:usize, pub public_url:String, pub upload_dir:String, pub geoip_db_path:Option<String> }
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
@@ -25,6 +25,9 @@ impl Config {
         }
         let workers:usize = std::env::var("WEB_WORKERS").unwrap_or_else(|_|"2".into()).parse()?;
         anyhow::ensure!(workers > 0, "WEB_WORKERS must be greater than zero");
-        Ok(Self { host:std::env::var("HOST").unwrap_or_else(|_|"0.0.0.0".into()), port:std::env::var("PORT").unwrap_or_else(|_|"8080".into()).parse()?, mongodb_url, mongodb_database:std::env::var("MONGODB_DATABASE").unwrap_or_else(|_|"italy_developers".into()), cookie_key, cookie_secure, workers, public_url, upload_dir:std::env::var("UPLOAD_DIR").unwrap_or_else(|_|"uploads".into()) })
+        let geoip_db_path = std::env::var("GEOIP_DB_PATH")
+            .ok()
+            .filter(|p| std::path::Path::new(p).is_file());
+        Ok(Self { host:std::env::var("HOST").unwrap_or_else(|_|"0.0.0.0".into()), port:std::env::var("PORT").unwrap_or_else(|_|"8080".into()).parse()?, mongodb_url, mongodb_database:std::env::var("MONGODB_DATABASE").unwrap_or_else(|_|"italy_developers".into()), cookie_key, cookie_secure, workers, public_url, upload_dir:std::env::var("UPLOAD_DIR").unwrap_or_else(|_|"uploads".into()), geoip_db_path })
     }
 }

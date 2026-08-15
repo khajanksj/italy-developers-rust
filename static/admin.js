@@ -347,8 +347,16 @@
   applyKindHelp();
   const syncSource = () => (source.value = visual.innerHTML),
     syncVisual = () => (visual.innerHTML = source.value);
+  const imageCommandInput = $("[data-image-command-input]");
+  let savedRange = null;
   $$("[data-command]").forEach((button) =>
     button.addEventListener("click", () => {
+      if (button.dataset.command === "image") {
+        const selection = window.getSelection();
+        savedRange = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+        imageCommandInput?.click();
+        return;
+      }
       let value = button.dataset.value || null;
       if (button.dataset.command === "createLink") {
         value = prompt("Enter a secure HTTPS link") || "";
@@ -363,6 +371,34 @@
       updateProgress();
     }),
   );
+  imageCommandInput?.addEventListener("change", async () => {
+    const file = imageCommandInput.files[0];
+    imageCommandInput.value = "";
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      toast("Image must be smaller than 8 MB.", "error");
+      return;
+    }
+    const body = new FormData();
+    body.append("image", file, file.name);
+    visual.focus();
+    if (savedRange) {
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(savedRange);
+    }
+    try {
+      const response = await fetch("/admin/media/upload", { method: "POST", body });
+      if (!response.ok) throw new Error("upload failed");
+      const data = await response.json();
+      document.execCommand("insertImage", false, data.url);
+      syncSource();
+      updateProgress();
+      markDirty();
+    } catch {
+      toast("Image upload failed.", "error");
+    }
+  });
   $("[data-source-toggle]")?.addEventListener("click", (event) => {
     const editor = event.currentTarget.closest(".rich-editor"),
       active = editor.classList.toggle("source-mode");
