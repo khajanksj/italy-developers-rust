@@ -481,7 +481,10 @@ pub fn routes(cfg: &mut web::ServiceConfig) {
                 .route("/insights", web::get().to(insights_i18n))
                 .route("/insights/{slug}", web::get().to(insight_detail_i18n))
                 .route("/blog", web::get().to(blog_i18n))
-                .route("/blog/{slug}", web::get().to(blog_detail_i18n)),
+                .route("/blog/{slug}", web::get().to(blog_detail_i18n))
+                .route("/contact", web::get().to(contact_page_i18n))
+                .route("/login", web::get().to(member_login_i18n))
+                .route("/register", web::get().to(member_register_i18n)),
         )
         .route("/blog/{slug}/comment", web::post().to(add_blog_comment))
         .route("/blog/{slug}/like", web::post().to(toggle_blog_like))
@@ -1506,7 +1509,8 @@ async fn collection_page(
 ) -> Result<HttpResponse, AppError> {
     let t = i18n::ui(lang);
     let prefix = i18n::prefix_for(lang);
-    html(CollectionTemplate {
+    let items = list_kind(db, kind, lang).await?;
+    let mut resp = html(CollectionTemplate {
         title: copy.title.into(),
         description: copy.description.into(),
         canonical: format!("{prefix}{path}"),
@@ -1514,12 +1518,14 @@ async fn collection_page(
         heading: copy.heading.into(),
         intro: copy.intro.into(),
         kind: kind.into(),
-        items: list_kind(db, kind, lang).await?,
+        items,
         lang: t.lang.into(),
         path_no_prefix: path.into(),
         prefix,
         t,
-    })
+    })?;
+    let _ = resp.add_cookie(&lang_cookie(lang));
+    Ok(resp)
 }
 async fn services(db: web::Data<Database>) -> Result<HttpResponse, AppError> {
     collection_page(&db, "service", "en", i18n::ui("en").services, "/services").await
@@ -1579,7 +1585,7 @@ async fn detail(
     } else { 0 };
     let t = i18n::ui(lang);
     let prefix = i18n::prefix_for(lang);
-    html(DetailTemplate {
+    let mut resp = html(DetailTemplate {
         canonical: format!("{prefix}{path}/{}", item.slug),
         path_no_prefix: format!("{path}/{}", item.slug),
         lang: t.lang.into(),
@@ -1592,7 +1598,9 @@ async fn detail(
         authenticated: authenticated(session),
         viewer_name: session.get::<String>("name").ok().flatten().unwrap_or_default(),
         t,
-    })
+    })?;
+    let _ = resp.add_cookie(&lang_cookie(lang));
+    Ok(resp)
 }
 async fn service_detail(session: Session, db: web::Data<Database>, slug: web::Path<String>) -> Result<HttpResponse, AppError> {
     detail(&db, &session, "service", &slug, "en", "/services", "Service").await
@@ -1790,16 +1798,23 @@ fn csrf(session: &Session) -> Result<String, AppError> {
         .map_err(|_| AppError::BadRequest)?;
     Ok(token)
 }
-async fn contact_page(req: HttpRequest, session: Session, geo: web::Data<geoip::GeoState>) -> Result<HttpResponse, AppError> {
-    let lang = detect_lang(&req, &geo);
-    html(ContactTemplate {
-        csrf: csrf(&session)?,
+async fn contact_page_render(lang: &str, session: &Session) -> Result<HttpResponse, AppError> {
+    let mut resp = html(ContactTemplate {
+        csrf: csrf(session)?,
         success: false,
         lang: lang.into(),
-        prefix: String::new(),
+        prefix: i18n::prefix_for(lang),
         path_no_prefix: "/contact".into(),
         t: i18n::ui(lang),
-    })
+    })?;
+    let _ = resp.add_cookie(&lang_cookie(lang));
+    Ok(resp)
+}
+async fn contact_page(req: HttpRequest, session: Session, geo: web::Data<geoip::GeoState>) -> Result<HttpResponse, AppError> {
+    contact_page_render(detect_lang(&req, &geo), &session).await
+}
+async fn contact_page_i18n(session: Session, lang: web::Path<String>) -> Result<HttpResponse, AppError> {
+    contact_page_render(i18n::normalize(&lang), &session).await
 }
 #[derive(Deserialize, Validate)]
 struct ContactForm {
@@ -1850,7 +1865,7 @@ async fn submit_contact(
         csrf: String::new(),
         success: true,
         lang: lang.into(),
-        prefix: String::new(),
+        prefix: i18n::prefix_for(lang),
         path_no_prefix: "/contact".into(),
         t: i18n::ui(lang),
     })
@@ -1959,19 +1974,34 @@ fn safe_next(value: &str) -> String {
     if value.starts_with('/') && !value.starts_with("//") { value.into() } else { "/".into() }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn member_auth_template(req: &HttpRequest, geo: &geoip::GeoState, register: bool, next: String, error: String, csrf: String) -> MemberAuthTemplate {
-    let lang = detect_lang(req, geo);
+fn member_auth_template(lang: &str, register: bool, next: String, error: String, csrf: String) -> MemberAuthTemplate {
     let path = if register { "/register" } else { "/login" };
-    MemberAuthTemplate { register, next, error, csrf, lang: lang.into(), prefix: String::new(), path_no_prefix: path.into(), t: i18n::ui(lang) }
+    MemberAuthTemplate { register, next, error, csrf, lang: lang.into(), prefix: i18n::prefix_for(lang), path_no_prefix: path.into(), t: i18n::ui(lang) }
+}
+
+async fn member_login_render(lang: &str, session: &Session, next: String) -> Result<HttpResponse, AppError> {
+    let mut resp = html(member_auth_template(lang, false, next, String::new(), csrf(session)?))?;
+    let _ = resp.add_cookie(&lang_cookie(lang));
+    Ok(resp)
+}
+async fn member_register_render(lang: &str, session: &Session, next: String) -> Result<HttpResponse, AppError> {
+    let mut resp = html(member_auth_template(lang, true, next, String::new(), csrf(session)?))?;
+    let _ = resp.add_cookie(&lang_cookie(lang));
+    Ok(resp)
 }
 
 async fn member_login(req: HttpRequest, session: Session, geo: web::Data<geoip::GeoState>, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
-    html(member_auth_template(&req, &geo, false, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
+    member_login_render(detect_lang(&req, &geo), &session, safe_next(query.next.as_deref().unwrap_or("/"))).await
+}
+async fn member_login_i18n(session: Session, lang: web::Path<String>, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    member_login_render(i18n::normalize(&lang), &session, safe_next(query.next.as_deref().unwrap_or("/"))).await
 }
 
 async fn member_register(req: HttpRequest, session: Session, geo: web::Data<geoip::GeoState>, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
-    html(member_auth_template(&req, &geo, true, safe_next(query.next.as_deref().unwrap_or("/")), String::new(), csrf(&session)?))
+    member_register_render(detect_lang(&req, &geo), &session, safe_next(query.next.as_deref().unwrap_or("/"))).await
+}
+async fn member_register_i18n(session: Session, lang: web::Path<String>, query: web::Query<MemberAuthQuery>) -> Result<HttpResponse, AppError> {
+    member_register_render(i18n::normalize(&lang), &session, safe_next(query.next.as_deref().unwrap_or("/"))).await
 }
 
 async fn member_auth(req: HttpRequest, session: Session, db: web::Data<Database>, geo: web::Data<geoip::GeoState>, form: web::Form<MemberLoginForm>) -> Result<HttpResponse, AppError> {
@@ -1987,7 +2017,8 @@ async fn member_auth(req: HttpRequest, session: Session, db: web::Data<Database>
             return Ok(HttpResponse::SeeOther().insert_header((header::LOCATION, safe_next(&form.next))).finish());
         }
     }
-    Ok(HttpResponse::Unauthorized().content_type("text/html; charset=utf-8").body(member_auth_template(&req, &geo, false, safe_next(&form.next), "Email or password is incorrect.".into(), csrf(&session)?).render()?))
+    let lang = detect_lang(&req, &geo);
+    Ok(HttpResponse::Unauthorized().content_type("text/html; charset=utf-8").body(member_auth_template(lang, false, safe_next(&form.next), "Email or password is incorrect.".into(), csrf(&session)?).render()?))
 }
 
 /// Registration accepts `multipart/form-data` (not a typed `web::Form`) so
@@ -2003,11 +2034,12 @@ async fn member_create(req: HttpRequest, session: Session, db: web::Data<Databas
     let name = get("name").trim().to_string();
     let email = get("email").trim().to_lowercase();
     let password = get("password");
+    let lang = detect_lang(&req, &geo);
     if !(2..=80).contains(&name.chars().count()) || !email.contains('@') || email.len() > 254 || password.len() < 12 {
-        return Ok(HttpResponse::UnprocessableEntity().content_type("text/html; charset=utf-8").body(member_auth_template(&req, &geo, true, safe_next(&next), "Use your real name, a valid email and a password of at least 12 characters.".into(), csrf(&session)?).render()?));
+        return Ok(HttpResponse::UnprocessableEntity().content_type("text/html; charset=utf-8").body(member_auth_template(lang, true, safe_next(&next), "Use your real name, a valid email and a password of at least 12 characters.".into(), csrf(&session)?).render()?));
     }
     if users(&db).count_documents(doc! {"email":&email}).await? > 0 {
-        return Ok(HttpResponse::Conflict().content_type("text/html; charset=utf-8").body(member_auth_template(&req, &geo, true, safe_next(&next), "An account already exists for this email.".into(), csrf(&session)?).render()?));
+        return Ok(HttpResponse::Conflict().content_type("text/html; charset=utf-8").body(member_auth_template(lang, true, safe_next(&next), "An account already exists for this email.".into(), csrf(&session)?).render()?));
     }
     let country = geoip::country_for(&req, &geo).unwrap_or_default();
     let native_language = geoip::locale_for_country(&country).unwrap_or_default().to_string();
